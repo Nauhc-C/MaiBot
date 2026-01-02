@@ -10,6 +10,7 @@
 
 | Helm Chart版本   | 对应的MaiBot版本  | Commit SHA                               |
 |----------------|--------------|------------------------------------------|
+| 0.12.1         | 0.12.1       |                                          |
 | 0.12.0         | 0.12.0       | baa6e90be7b20050fe25dfc74c0c70653601d00e |
 | 0.11.6-beta    | 0.11.6-beta  | 0bfff0457e6db3f7102fb7f77c58d972634fc93c |
 | 0.11.5-beta    | 0.11.5-beta  | ad2df627001f18996802f23c405b263e78af0d0f |
@@ -26,7 +27,7 @@
 helm install maimai \
     oci://reg.mikumikumi.xyz/maibot/maibot \
     --namespace bot \
-    --version <MAIBOT_VERSION> \
+    --version <CHART_VERSION> \
     --values maibot.yaml
 ```
 

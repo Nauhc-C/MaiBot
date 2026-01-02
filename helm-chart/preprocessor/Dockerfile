@@ -1,4 +1,3 @@
-# 此镜像用于在部署helm chart时动态生成adapter的配置文件
 FROM python:3.13-slim
 
 WORKDIR /app

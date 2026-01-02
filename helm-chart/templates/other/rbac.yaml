@@ -1,4 +1,4 @@
-# 初始化及反向修改ConfigMap所需要的rbac授权
+# 预处理脚本迁移旧版ConfigMap配置，以及启停实例所需要的rbac授权
 apiVersion: v1
 kind: ServiceAccount
 metadata:
