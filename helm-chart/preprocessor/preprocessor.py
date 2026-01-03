@@ -84,7 +84,7 @@ def migrate_old_config():
         return True
 
     # 对于0.11.5-beta版本，adapter的config.toml、core的bot_config.toml和model_config.toml均存储于不同的ConfigMap，需要依次迁移
-    if True not in status_migrating.values():
+    if old_configmap_version is None:
         status_migrating['adapter_config.toml'] = migrate_cm_to_file(f'{release_name}-maibot-adapter-config',
                                                                      'config.toml',
                                                                      '/app/config/adapter/config.toml')
@@ -94,11 +94,11 @@ def migrate_old_config():
         status_migrating['core_model_config.toml'] = migrate_cm_to_file(f'{release_name}-maibot-core-model-config',
                                                                         'model_config.toml',
                                                                         '/app/config/core/model_config.toml')
-    if True in status_migrating.values():
-        old_configmap_version = '0.11.5-beta'
+        if True in status_migrating.values():
+            old_configmap_version = '0.11.5-beta'
 
     # 对于低于0.11.5-beta的版本，adapter的1个配置和core的3个配置位于各自的configmap中
-    if True not in status_migrating.values():
+    if old_configmap_version is None:
         status_migrating['adapter_config.toml'] = migrate_cm_to_file(f'{release_name}-maibot-adapter',
                                                                      'config.toml',
                                                                      '/app/config/adapter/config.toml')
@@ -108,8 +108,8 @@ def migrate_old_config():
         status_migrating['core_model_config.toml'] = migrate_cm_to_file(f'{release_name}-maibot-core',
                                                                         'model_config.toml',
                                                                         '/app/config/core/model_config.toml')
-    if True in status_migrating.values():
-        old_configmap_version = 'before 0.11.5-beta'
+        if True in status_migrating.values():
+            old_configmap_version = 'before 0.11.5-beta'
 
     if old_configmap_version:
         log(func_name, f'Migrating status for version `{old_configmap_version}`:')

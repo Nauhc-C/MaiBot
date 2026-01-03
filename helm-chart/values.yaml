@@ -1,7 +1,7 @@
 # 只有同意了EULA和PRIVACY协议才可以部署麦麦
 # 配置以下的选项为true表示你同意了EULA和PRIVACY条款
-# https://github.com/MaiM-with-u/MaiBot/blob/main/EULA.md
-# https://github.com/MaiM-with-u/MaiBot/blob/main/PRIVACY.md
+# https://github.com/Mai-with-u/MaiBot/blob/main/EULA.md
+# https://github.com/Mai-with-u/MaiBot/blob/main/PRIVACY.md
 EULA_AGREE: false
 PRIVACY_AGREE: false
 
@@ -9,7 +9,7 @@ PRIVACY_AGREE: false
 pre_processor:
   image:
     repository: # 默认 reg.mikumikumi.xyz/maibot/preprocessor
-    tag: # 默认 0.12.0
+    tag: # 默认 0.12.1
     pullPolicy: IfNotPresent
     pullSecrets: [ ]
 
@@ -56,7 +56,7 @@ core:
 
   image:
     repository: # 默认 sengokucola/maibot
-    tag: # 默认 0.12.0
+    tag: # 默认 0.12.1
     pullPolicy: IfNotPresent
     pullSecrets: [ ]
 
@@ -151,7 +151,7 @@ napcat:
 
   image:
     repository: # 默认 mlikiowa/napcat-docker
-    tag: # 默认 v4.9.91
+    tag: # 默认 v.4.10.1
     pullPolicy: IfNotPresent
     pullSecrets: [ ]
 
@@ -270,7 +270,7 @@ config:
   # core的model_config.toml
   core_model_config: |
     [inner]
-    version = "1.9.1"
+    version = "1.11.0"
     
     # 配置文件版本号迭代规则同bot_config.toml
     
@@ -411,44 +411,45 @@ config:
     temperature = 0.2                        # 模型温度，新V3建议0.1-0.3
     max_tokens = 4096                         # 最大输出token数
     slow_threshold = 15.0                     # 慢请求阈值（秒），模型等待回复时间超过此值会输出警告日志
+    selection_strategy = "random"           # 模型选择策略：balance（负载均衡）或 random（随机选择）
     
-    [model_task_config.utils_small] # 在麦麦的一些组件中使用的小模型，消耗量较大，建议使用速度较快的小模型
+    [model_task_config.tool_use] #功能模型，需要使用支持工具调用的模型，请使用较快的小模型（调用量较大）
     model_list = ["qwen3-30b","qwen3-next-80b"]
     temperature = 0.7
-    max_tokens = 2048
+    max_tokens = 1024
     slow_threshold = 10.0
+    selection_strategy = "random"           # 模型选择策略：balance（负载均衡）或 random（随机选择）
     
-    [model_task_config.tool_use] #工具调用模型，需要使用支持工具调用的模型
-    model_list = ["qwen3-30b","qwen3-next-80b"]
-    temperature = 0.7
-    max_tokens = 800
-    slow_threshold = 10.0
-    
-    [model_task_config.replyer] # 首要回复模型，还用于表达器和表达方式学习
+    [model_task_config.replyer] # 首要回复模型，还用于表达方式学习
     model_list = ["siliconflow-deepseek-v3.2","siliconflow-deepseek-v3.2-think","siliconflow-glm-4.6","siliconflow-glm-4.6-think"]
     temperature = 0.3                        # 模型温度，新V3建议0.1-0.3
     max_tokens = 2048
     slow_threshold = 25.0
+    selection_strategy = "random"           # 模型选择策略：balance（负载均衡）或 random（随机选择）
     
     [model_task_config.planner] #决策：负责决定麦麦该什么时候回复的模型
     model_list = ["siliconflow-deepseek-v3.2"]
     temperature = 0.3
     max_tokens = 800
     slow_threshold = 12.0
+    selection_strategy = "random"           # 模型选择策略：balance（负载均衡）或 random（随机选择）
     
     [model_task_config.vlm] # 图像识别模型
     model_list = ["qwen3-vl-30"]
     max_tokens = 256
     slow_threshold = 15.0
+    selection_strategy = "random"           # 模型选择策略：balance（负载均衡）或 random（随机选择）
     
     [model_task_config.voice] # 语音识别模型
     model_list = ["sensevoice-small"]
     slow_threshold = 12.0
+    selection_strategy = "random"           # 模型选择策略：balance（负载均衡）或 random（随机选择）
     
     # 嵌入模型
     [model_task_config.embedding]
     model_list = ["bge-m3"]
     slow_threshold = 5.0
+    selection_strategy = "random"           # 模型选择策略：balance（负载均衡）或 random（随机选择）
     
     # ------------LPMM知识库模型------------
     
@@ -457,23 +458,19 @@ config:
     temperature = 0.2
     max_tokens = 800
     slow_threshold = 20.0
+    selection_strategy = "random"           # 模型选择策略：balance（负载均衡）或 random（随机选择）
     
     [model_task_config.lpmm_rdf_build] # RDF构建模型
     model_list = ["siliconflow-deepseek-v3.2"]
     temperature = 0.2
     max_tokens = 800
     slow_threshold = 20.0
-    
-    [model_task_config.lpmm_qa] # 问答模型
-    model_list = ["siliconflow-deepseek-v3.2"]
-    temperature = 0.7
-    max_tokens = 800
-    slow_threshold = 20.0
+    selection_strategy = "random"           # 模型选择策略：balance（负载均衡）或 random（随机选择）
 
   # core的bot_config.toml
   core_bot_config: |
     [inner]
-    version = "7.2.5"
+    version = "7.3.3"
     
     #----以下是给开发人员阅读的，如果你只是部署了麦麦，不需要阅读----
     # 如果你想要修改配置文件，请递增version的值
@@ -495,13 +492,13 @@ config:
     alias_names = ["麦叠", "牢麦"] # 麦麦的别名
     
     [personality]
-    # 建议120字以内，描述人格特质 和 身份特征
+    # 建议100字以内，描述人格特质 和 身份特征
     personality = "是一个大二在读女大学生，现在正在上网和群友聊天，有时有点攻击性，有时比较温柔"  
     # アイデンティティがない 生まれないらららら
     # 描述麦麦说话的表达风格，表达习惯，如要修改，可以酌情新增内容，建议1-2行
     reply_style = "请不要刻意突出自身学科背景。可以参考贴吧，知乎和微博的回复风格。"
     
-    # 多种回复风格列表，可选配置：当 non-empty 且 multiple_probability>0 时，会按概率随机从中选择一个替换 reply_style
+    # 多种回复风格，根据概率随机选择表达风格
     multiple_reply_style = [
         # "你的风格平淡但不失讽刺，很简短,很白话。可以参考贴吧，微博的回复风格。",
         # "用1-2个字进行回复",
@@ -510,10 +507,10 @@ config:
         # "带点翻译腔，但不要太长",
     ]
     
-    # 替换概率：每次构建回复时，以该概率从 multiple_reply_style 中随机选择一个替换 reply_style（0.0-1.0）
+    # 使用多种回复风风格的概率
     multiple_probability = 0.3
     
-    # 麦麦的说话规则，行为风格:
+    # 麦麦的说话规则和行为规则:
     plan_style = """
     1.思考**所有**的可用的action中的**每个动作**是否符合当下条件，如果动作使用条件符合聊天内容就使用
     2.如果相同的内容已经被执行，请不要重复执行
@@ -522,8 +519,6 @@ config:
     5.如果有人对你感到厌烦，请减少回复
     6.如果有人在追问你，或者话题没有说完，请你继续回复"""
     
-    # 麦麦识图规则，不建议修改
-    visual_style = "请用中文描述这张图片的内容。如果有文字，请把文字描述概括出来，请留意其主题，直观感受，输出为一段平文本，最多30字，请注意不要分点，就输出一段文本"
     
     # 麦麦私聊的说话规则，行为风格:
     private_plan_style = """
@@ -531,16 +526,18 @@ config:
     2.如果相同的内容已经被执行，请不要重复执行
     3.某句话如果已经被回复过，不要重复回复"""
     
-    # 状态，可以理解为人格多样性，会随机替换人格
+    # 多重人格，根据概率随机选择人格
     states = [
         "是一个女大学生，喜欢上网聊天，会刷小红书。" ,
         "是一个大二心理学生，会刷贴吧和中国知网。" ,
         "是一个赛博网友，最近很想吐槽人。" 
     ]
     
-    # 替换概率，每次构建人格时替换personality的概率（0.0-1.0）
+    # 使用多重人格的概率
     state_probability = 0.3
     
+    # 麦麦识图规则，不建议修改
+    visual_style = "请用中文描述这张图片的内容。如果有文字，请把文字描述概括出来，请留意其主题，直观感受，输出为一段平文本，最多30字，请注意不要分点，就输出一段文本"
     
     
     [expression]
@@ -565,13 +562,22 @@ config:
         # 注意：如果为群聊，则需要设置为group，如果设置为私聊，则需要设置为private
     ]
     
-    reflect = false # 是否启用表达反思（Bot主动向管理员询问表达方式是否合适）
-    reflect_operator_id = "" # 表达反思操作员ID，格式：platform:id:type (例如 "qq:123456:private" 或 "qq:654321:group")
+    expression_checked_only = true # 麦麦只会使用检查过的表达方式
+    
+    expression_self_reflect = true # 是否启用自动表达优化
+    expression_auto_check_interval = 600 # 表达方式自动检查的间隔时间（单位：秒），默认值：600秒（10分钟）
+    expression_auto_check_count = 20 # 每次自动检查时随机选取的表达方式数量，默认值：20条
+    expression_auto_check_custom_criteria = [] # 表达方式自动检查的额外自定义评估标准，格式：["标准1", "标准2", "标准3", ...]，这些标准会被添加到评估提示词中，作为额外的评估要求
+    
+    expression_manual_reflect = false # 是否启用手动表达优化
+    manual_reflect_operator_id = "" # 手动表达优化操作员ID，格式：platform:id:type (例如 "qq:123456:private" 或 "qq:654321:group")
     allow_reflect = [] # 允许进行表达反思的聊天流ID列表，格式：["qq:123456:private", "qq:654321:group", ...]，只有在此列表中的聊天流才会提出问题并跟踪。如果列表为空，则所有聊天流都可以进行表达反思（前提是 reflect = true）
+    
     
     all_global_jargon = true # 是否开启全局黑话模式，注意，此功能关闭后，已经记录的全局黑话不会改变，需要手动删除
     enable_jargon_explanation = true # 是否在回复前尝试对上下文中的黑话进行解释（关闭可减少一次LLM调用，仅影响回复前的黑话匹配与解释，不影响黑话学习）
     jargon_mode = "planner" # 黑话解释来源模式，可选： "context"（使用上下文自动匹配黑话） 或 "planner"（仅使用Planner在reply动作中给出的unknown_words列表）
+    
     
     
     [chat] # 麦麦的聊天设置
@@ -580,6 +586,10 @@ config:
     max_context_size = 30 # 上下文长度
     planner_smooth = 3 # 规划器平滑，增大数值会减小planner负荷，略微降低反应速度，推荐1-5，0为关闭，必须大于等于0
     think_mode = "dynamic" # 思考模式，可选：classic（默认浅度思考和回复）、deep（会进行比较长的，深度回复）、dynamic（动态选择两种模式）
+    
+    plan_reply_log_max_per_chat = 1024 # 每个聊天保存最大的Plan/Reply日志数量，超过此数量时会自动删除最老的日志
+    
+    llm_quote = false # 是否由llm执行引用
     
     enable_talk_value_rules = true # 是否启用动态发言频率规则
     
@@ -596,10 +606,13 @@ config:
     ]
     
     [memory]
-    max_agent_iterations = 3 # 记忆思考深度（最低为1）
-    agent_timeout_seconds = 45.0 # 最长回忆时间（秒）
-    enable_jargon_detection = true # 记忆检索过程中是否启用黑话识别
+    max_agent_iterations = 5 # 记忆思考深度（最低为1）
+    agent_timeout_seconds = 180.0 # 最长回忆时间（秒）
     global_memory = false # 是否允许记忆检索进行全局查询
+    global_memory_blacklist = [
+        
+    ] # 全局记忆黑名单，当启用全局记忆时，不将特定聊天流纳入检索。格式: ["platform:id:type", ...]，例如: ["qq:1919810:private", "qq:114514:group"]
+    planner_question = true # 是否使用 Planner 提供的 question 作为记忆检索问题。开启后，当 Planner 在 reply 动作中提供了 question 时，直接使用该问题进行记忆检索，跳过 LLM 生成问题的步骤；关闭后沿用旧模式，使用 LLM 生成问题
     
     [dream]
     interval_minutes = 60 # 做梦时间间隔（分钟），默认30分钟
@@ -729,9 +742,6 @@ config:
     auth_token = [] # 认证令牌，用于旧版API验证，为空则不启用验证
     
     # 新版API Server配置（额外监听端口）
-    enable_api_server = false # 是否启用额外的新版API Server
-    api_server_host = "0.0.0.0" # 新版API Server主机地址
-    api_server_port = 8090 # 新版API Server端口号
     api_server_use_wss = false # 新版API Server是否启用WSS
     api_server_cert_file = "" # 新版API Server SSL证书文件路径
     api_server_key_file = "" # 新版API Server SSL密钥文件路径
@@ -742,13 +752,10 @@ config:
     
     [webui] # WebUI 独立服务器配置
     # 注意: WebUI 的监听地址(host)和端口(port)已移至 .env 文件中的 WEBUI_HOST 和 WEBUI_PORT
-    enabled = true # 是否启用WebUI
     mode = "production" # 模式: development(开发) 或 production(生产)
     
     # 防爬虫配置
-    anti_crawler_mode = "basic" # 防爬虫模式: false(禁用) / strict(严格) / loose(宽松) / basic(基础-只记录不阻止)
-    allowed_ips = "127.0.0.1" # IP白名单（逗号分隔，支持精确IP、CIDR格式和通配符）
-                              # 示例: 127.0.0.1,192.168.1.0/24,172.17.0.0/16
+    anti_crawler_mode = "loose" # 防爬虫模式: false(禁用) / strict(严格) / loose(宽松) / basic(基础-只记录不阻止)
     trusted_proxies = "" # 信任的代理IP列表（逗号分隔），只有来自这些IP的X-Forwarded-For才被信任
                          # 示例: 127.0.0.1,192.168.1.1,172.17.0.1
     trust_xff = false # 是否启用X-Forwarded-For代理解析（默认false）
