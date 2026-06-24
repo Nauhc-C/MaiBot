@@ -79,6 +79,22 @@ def register_chat_hook_specs(registry: HookSpecRegistry) -> List[HookSpec]:
                 allow_kwargs_mutation=True,
             ),
             HookSpec(
+                name="chat.receive.before_main_reply",
+                description="在消息完成过滤、命令分流后，正式路由到 Maisaka 主回复流程前触发。",
+                parameters_schema=build_object_schema(
+                    {
+                        "message": {
+                            "type": "object",
+                            "description": "即将进入主回复流程的序列化 SessionMessage。",
+                        },
+                    },
+                    required=["message"],
+                ),
+                default_timeout_ms=0,
+                allow_abort=True,
+                allow_kwargs_mutation=True,
+            ),
+            HookSpec(
                 name="chat.command.before_execute",
                 description="在命令匹配成功、实际执行前触发，可拦截命令或改写命令上下文。",
                 parameters_schema=build_object_schema(
@@ -647,6 +663,14 @@ class ChatBot:
             #     return
             # if modified_message and modified_message._modify_flags.modify_plain_text:
             #     message.processed_plain_text = modified_message.plain_text
+
+            before_main_reply_result, message = await self._invoke_message_hook(
+                "chat.receive.before_main_reply",
+                message,
+            )
+            if before_main_reply_result.aborted:
+                logger.info(f"消息 {message.message_id} 在进入主回复流程前被 Hook 中止")
+                return
 
             async def preprocess():
                 if group_info is None:

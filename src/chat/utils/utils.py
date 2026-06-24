@@ -253,7 +253,7 @@ async def get_embedding(text: str, request_type: str = "embedding") -> Optional[
 
 def split_into_sentences_w_remove_punctuation(text: str) -> list[str]:
     """将文本分割成句子，并根据概率合并
-    1. 识别分割点（, ， 。 ; 空格），但如果分割点左右都是英文字母则不分割。
+    1. 识别分割点（。 ; 换行），但如果分割点左右都是英文字母则不分割。
     2. 将文本分割成 (内容, 分隔符) 的元组。
     3. 根据原始文本长度计算合并概率，概率性地合并相邻段落。
     注意：此函数假定颜文字已在上层被保护。
@@ -310,7 +310,8 @@ def split_into_sentences_w_remove_punctuation(text: str) -> list[str]:
             inside_quote[idx] = in_quote
 
     # 定义分隔符（包含换行符）
-    separators = {"，", ",", " ", "。", ";", "\n"}
+    # 最小化误切：默认只按句号、分号和换行切分，不再把逗号或普通空格当作句子边界。
+    separators = {"。", ";", "\n"}
     segments = []
     current_segment = ""
 
@@ -487,8 +488,8 @@ def _get_random_default_reply() -> str:
         f"{global_config.bot.nickname}不知道",
         "不知道哦",
         "不知道",
-        "不晓得",
-        "懒得说",
+        "我一下子没想好",
+        "这个我得再想想",
         "()",
     ]
     return random.choice(default_replies)
@@ -559,8 +560,9 @@ def process_llm_response(text: str, enable_splitter: bool = True, enable_chinese
             logger.warning(f"分割后消息数量过多 ({len(sentences)} 条)，直接返回原文")
             sentences = [cleaned_text]
         else:
-            logger.warning(f"分割后消息数量过多 ({len(sentences)} 条)，返回默认回复")
-            return [_get_random_default_reply()]
+            logger.warning(
+                f"分割后消息数量过多 ({len(sentences)} 条)，改为合并压缩到 {max_split_num} 条以内后发送"
+            )
 
     sentences = merge_sentences_to_max_count(sentences, max_split_num)
 

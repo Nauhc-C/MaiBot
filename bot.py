@@ -170,6 +170,7 @@ loop = None
 def print_opensource_notice():
     """打印开源项目提示，防止倒卖"""
     from colorama import init, Fore, Style
+    import sys
 
     init()
 
@@ -190,8 +191,15 @@ def print_opensource_notice():
         "",
     ]
 
+    def _safe_write(text: str) -> None:
+        try:
+            sys.stdout.write(text + "\n")
+        except UnicodeEncodeError:
+            sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="ignore"))
+            sys.stdout.buffer.flush()
+
     for line in notice_lines:
-        print(line)
+        _safe_write(line)
 
 
 def easter_egg():

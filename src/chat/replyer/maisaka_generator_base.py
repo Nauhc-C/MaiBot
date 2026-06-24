@@ -69,6 +69,25 @@ class MaisakaReplyContext:
 class BaseMaisakaReplyGenerator:
     """Maisaka replyer 的共享实现。"""
 
+    _CATCHPHRASE_STYLE_POLICY = (
+        "句尾时不时加上 desuwa，也可偶尔用 desuno、teyo、maa；但不要每句都加，整条最多一次；"
+        "如果上一条你自己的消息已经用了口癖，这一条就不要再用。"
+    )
+    _STALE_CATCHPHRASE_STYLE_SNIPPETS = (
+        "一半的对话中带有口癖，带有口癖的对话中默认使用desuwa；",
+        "desuno比 desuwa 稍微多一点追问感、确认感，比如“是这样吗，desuno？”；",
+        "teyo更像轻微强调或带一点催促，比如“请别这样说，teyo”；",
+        "maa相当于“嘛”或“怎么说呢“；",
+        "默认不用口癖；只在撒娇、收尾、轻确认时偶尔用一次，整条最多一次；最近两条你自己的消息如果已经用了口癖，这一条就不要再用。",
+        "默认少用口癖；可在撒娇、收尾、轻确认时偶尔用一次，整条最多一次；最近两条你自己的消息如果已经用了口癖，这一条就不要再用。",
+        "时不时带一点口癖；带口癖时可优先用 desuwa，也可自然使用 desuno、teyo、maa；整条最多一次；最近两条你自己的消息如果已经用了口癖，这一条就不要再用。",
+        "时不时带一点口癖；带口癖时可优先用 desuwa，也可自然使用 desuno、teyo、maa；",
+        "时不时带一点口癖；带口癖时可优先用desuwa，也可自然使用desuno、teyo、maa；",
+        "句尾时不时加上 desuwa，也可偶尔用 desuno、teyo、maa；但不要每句都加，整条最多一次；如果上一条你自己的消息已经用了口癖，这一条就不要再用。",
+        "句尾时不时加上desuwa，也可偶尔用desuno、teyo、maa，但不要每句都加；",
+    )
+    _CATCHPHRASE_PATTERN = re.compile(r"(?<![A-Za-z])(desuwa|desuno|teyo|maa)(?![A-Za-z])", re.IGNORECASE)
+
     def __init__(
         self,
         *,
@@ -107,10 +126,17 @@ class BaseMaisakaReplyGenerator:
             logger.warning(f"构建 Maisaka 人设提示词失败: {exc}")
             return "你的名字是麦麦。\n是人类。"
 
-    @staticmethod
-    def _select_reply_style() -> str:
+    @classmethod
+    def _select_reply_style(cls) -> str:
         """返回 replyer 使用的基础表达风格。"""
-        return global_config.personality.reply_style
+        reply_style = global_config.personality.reply_style.strip()
+        for stale_snippet in cls._STALE_CATCHPHRASE_STYLE_SNIPPETS:
+            reply_style = reply_style.replace(stale_snippet, "")
+
+        normalized_reply_style = reply_style.strip(" \t\r\n；;，,")
+        if normalized_reply_style:
+            return f"{normalized_reply_style}\n{cls._CATCHPHRASE_STYLE_POLICY}"
+        return cls._CATCHPHRASE_STYLE_POLICY
 
     @staticmethod
     def _select_temporary_reply_style() -> str:
@@ -151,6 +177,41 @@ class BaseMaisakaReplyGenerator:
         _, body = parse_speaker_content(plain_text)
         normalized_body = body.strip()
         return self._normalize_content(normalized_body) if normalized_body else ""
+
+    @classmethod
+    def _contains_catchphrase(cls, content: str) -> bool:
+        """判断文本中是否出现了受控口癖。"""
+        return bool(cls._CATCHPHRASE_PATTERN.search((content or "").strip()))
+
+    def _collect_recent_bot_reply_texts(
+        self,
+        chat_history: List[LLMContextMessage],
+        limit: int = 3,
+    ) -> List[str]:
+        """收集最近几条 bot 自己的可见回复文本。"""
+        recent_reply_texts: List[str] = []
+        for message in reversed(chat_history):
+            visible_reply = ""
+            if isinstance(message, SessionBackedMessage):
+                visible_reply = self._extract_guided_bot_reply(message)
+            elif isinstance(message, AssistantMessage):
+                visible_reply = self._extract_visible_assistant_reply(message)
+
+            if not visible_reply:
+                continue
+
+            recent_reply_texts.append(visible_reply)
+            if len(recent_reply_texts) >= limit:
+                break
+
+        return recent_reply_texts
+
+    def _build_recent_catchphrase_requirement(self, chat_history: List[LLMContextMessage]) -> str:
+        """根据最近自发消息决定是否禁止本轮继续使用口癖。"""
+        recent_reply_texts = self._collect_recent_bot_reply_texts(chat_history, limit=1)
+        if not any(self._contains_catchphrase(reply_text) for reply_text in recent_reply_texts):
+            return ""
+        return "硬性要求：上一条你自己的消息里已经出现过 desuwa/desuno/teyo/maa，这条不要再用口癖，用自然中文表达。"
 
     def _build_target_message_block(self, reply_message: Optional[SessionMessage]) -> str:
         if reply_message is None:
@@ -454,6 +515,7 @@ class BaseMaisakaReplyGenerator:
 
     def _build_final_user_message(
         self,
+        chat_history: List[LLMContextMessage],
         reply_message: Optional[SessionMessage],
         reply_reason: str,
         reply_requirements: str = "",
@@ -469,6 +531,9 @@ class BaseMaisakaReplyGenerator:
             reply_reference_lines.append(f"【最新推理】\n{reply_reason.strip()}")
         if reply_reference_lines:
             sections.append("【回复信息参考】\n" + "\n\n".join(reply_reference_lines))
+        recent_catchphrase_requirement = self._build_recent_catchphrase_requirement(chat_history)
+        if recent_catchphrase_requirement:
+            sections.append(recent_catchphrase_requirement)
         if reply_requirements.strip():
             sections.append(reply_requirements.strip())
         if keywords_reaction_prompt.strip():
@@ -545,6 +610,7 @@ class BaseMaisakaReplyGenerator:
             stream_id=stream_id,
         )
         final_user_message = self._build_final_user_message(
+            chat_history=chat_history,
             reply_message=reply_message,
             reply_reason=reply_reason,
             reply_requirements=reply_requirements,
@@ -659,13 +725,20 @@ class BaseMaisakaReplyGenerator:
         return dict(raw_value) if isinstance(raw_value, dict) else {}
 
     @staticmethod
-    def _build_reply_requirements(extra_prompt: str, retry_constraints: List[str]) -> str:
+    def _build_reply_requirements(
+        extra_prompt: str,
+        retry_constraints: List[str],
+        reply_tool_args: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """构建 replyer 本轮额外回复要求。"""
 
         blocks: List[str] = []
         normalized_extra_prompt = extra_prompt.strip()
         if normalized_extra_prompt:
             blocks.append(f"【额外回复要求】\n{normalized_extra_prompt}")
+        normalized_reply_guide = str((reply_tool_args or {}).get("reply_guide") or "").strip()
+        if normalized_reply_guide:
+            blocks.append(f"【Planner回复指引】\n{normalized_reply_guide}")
         if retry_constraints:
             retry_lines = ["【重生成约束】"]
             retry_lines.extend(retry_constraints[-REPLYER_MAX_HOOK_RETRIES:])
@@ -1041,6 +1114,7 @@ class BaseMaisakaReplyGenerator:
             active_reply_requirements = self._build_reply_requirements(
                 str(before_request_kwargs.get("extra_prompt") or ""),
                 retry_constraints,
+                active_reply_tool_args,
             )
 
             prompt_started_at = time.perf_counter()

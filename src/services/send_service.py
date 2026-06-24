@@ -216,6 +216,20 @@ def _coerce_bool(value: Any, default: bool) -> bool:
     return bool(value)
 
 
+def _hook_result_marks_message_sent(hook_result: HookDispatchResult) -> bool:
+    """判断 Hook 中止是否代表消息已被替代发送成功。"""
+
+    for custom_result in hook_result.custom_results:
+        if not isinstance(custom_result, dict):
+            continue
+        send_service_result = custom_result.get("send_service")
+        if not isinstance(send_service_result, dict):
+            continue
+        if send_service_result.get("status") == "sent":
+            return True
+    return False
+
+
 async def _invoke_send_hook(
     hook_name: str,
     message: SessionMessage,
@@ -1089,6 +1103,14 @@ async def _send_to_target_with_message(
             show_log=show_log,
         )
         if after_build_result.aborted:
+            if _hook_result_marks_message_sent(after_build_result):
+                logger.info(f"[SendService] 消息 {outbound_message.message_id} 已由 Hook 替代发送")
+                if sync_to_maisaka_history:
+                    _sync_sent_message_to_maisaka_history(
+                        outbound_message,
+                        source_kind=str(maisaka_source_kind or "outbound_send"),
+                    )
+                return outbound_message
             logger.info(f"[SendService] 消息 {outbound_message.message_id} 在构建后被 Hook 中止")
             return None
 

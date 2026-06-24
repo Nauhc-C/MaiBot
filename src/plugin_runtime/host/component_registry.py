@@ -521,6 +521,31 @@ class ComponentRegistry:
         }
 
     @staticmethod
+    def _normalize_component_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """规范化组件元数据，兼容 SDK 导出的嵌套 metadata 结构。
+
+        新版 SDK 的 ``collect_components()`` 会把组件对象整体 ``model_dump`` 后放进
+        ``metadata`` 字段，自定义元数据因此变成 ``metadata.metadata``。Host 侧长期
+        按顶层字段读取 ``visibility`` / ``activation_type`` 等声明，这里做一层摊平，
+        让当前 Runner 与旧声明结构都能正常工作。
+
+        Args:
+            metadata: Runner 侧传来的原始组件元数据。
+
+        Returns:
+            Dict[str, Any]: 兼容性展开后的组件元数据。
+        """
+
+        normalized_metadata = dict(metadata)
+        nested_metadata = normalized_metadata.pop("metadata", None)
+        if isinstance(nested_metadata, dict):
+            for key, value in nested_metadata.items():
+                normalized_key = str(key).strip()
+                if normalized_key and normalized_key not in normalized_metadata:
+                    normalized_metadata[normalized_key] = value
+        return normalized_metadata
+
+    @staticmethod
     def _normalize_component_type(component_type: str) -> ComponentTypes:
         """规范化组件类型输入。
 
@@ -631,7 +656,7 @@ class ComponentRegistry:
 
         try:
             normalized_type = self._normalize_component_type(component_type)
-            normalized_metadata = dict(metadata)
+            normalized_metadata = self._normalize_component_metadata(metadata)
             if normalized_type == ComponentTypes.ACTION:
                 normalized_metadata = self._convert_action_metadata_to_tool_metadata(name, normalized_metadata)
                 component = ToolEntry(
