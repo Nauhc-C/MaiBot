@@ -128,9 +128,97 @@ async def test_execute_backend_falls_back_to_available_default(tts_modules, monk
     assert result.message == "fallback:你好:voice-style:happy"
 
 
+@pytest.mark.asyncio
+async def test_execute_backend_falls_back_when_primary_runtime_execution_fails(tts_modules, monkeypatch):
+    _config_keys_module, _base_module, plugin_module = tts_modules
+    unified_plugin_class = plugin_module.UnifiedTTSPlugin
+    tts_result_class = plugin_module.TTSResult
+
+    plugin = object.__new__(unified_plugin_class)
+    plugin._plugin_config_instance = SimpleNamespace(general=SimpleNamespace(default_backend="gsv2p"))
+    plugin._ctx = SimpleNamespace(logger=SimpleNamespace(warning=lambda *args, **kwargs: None, info=lambda *args, **kwargs: None))
+
+    class FailingBackend:
+        def validate_config(self):
+            return True, ""
+
+        async def execute(self, text, voice, emotion=""):
+            return tts_result_class(False, "Cannot connect to host 127.0.0.1:9880", backend_name="gpt_sovits")
+
+    class WorkingBackend:
+        def validate_config(self):
+            return True, ""
+
+        async def execute(self, text, voice, emotion=""):
+            return tts_result_class(True, f"fallback:{text}:{voice}:{emotion}", backend_name="gsv2p")
+
+    backend_map = {
+        "gpt_sovits": FailingBackend(),
+        "gsv2p": WorkingBackend(),
+    }
+
+    monkeypatch.setattr(plugin, "_get_default_backend", lambda: "gsv2p")
+    monkeypatch.setattr(plugin, "_create_backend", lambda backend_name, stream_id, log_prefix: backend_map.get(backend_name))
+
+    result = await plugin._execute_backend(
+        "gpt_sovits",
+        "早上好 desuwa",
+        "stream-1",
+        "[test]",
+        voice="voice-style",
+        emotion="happy",
+        allow_backend_fallback=True,
+    )
+
+    assert result.success is True
+    assert result.message == "fallback:早上好 ですわ:voice-style:happy"
+
+
 def test_tts_action_is_visible_to_planner(tts_modules):
     _config_keys_module, _base_module, plugin_module = tts_modules
     component_info = getattr(plugin_module.UnifiedTTSPlugin.handle_tts_action, "__maibot_component_info__")
 
     assert component_info.metadata["legacy_action"] is True
     assert component_info.metadata["visibility"] == "visible"
+
+
+def test_normalize_text_for_tts_only_converts_catchphrase(tts_modules):
+    _config_keys_module, _base_module, plugin_module = tts_modules
+
+    normalized = plugin_module.UnifiedTTSPlugin._normalize_text_for_tts(
+        "`Sleep for Android` 其实已经很强了，你要还是安卓党，未必有明显更好的平替 desuwa"
+    )
+
+    assert normalized == "`Sleep for Android` 其实已经很强了，你要还是安卓党，未必有明显更好的平替 ですわ"
+
+
+@pytest.mark.asyncio
+async def test_execute_backend_normalizes_romaji_catchphrase_before_tts(tts_modules, monkeypatch):
+    _config_keys_module, _base_module, plugin_module = tts_modules
+    unified_plugin_class = plugin_module.UnifiedTTSPlugin
+    tts_result_class = plugin_module.TTSResult
+
+    plugin = object.__new__(unified_plugin_class)
+    plugin._plugin_config_instance = SimpleNamespace(general=SimpleNamespace(default_backend="gpt_sovits"))
+    plugin._ctx = SimpleNamespace(logger=SimpleNamespace(info=lambda *args, **kwargs: None))
+
+    class FakeBackend:
+        def validate_config(self):
+            return True, ""
+
+        async def execute(self, text, voice, emotion=""):
+            return tts_result_class(True, f"{text}|{voice}|{emotion}", backend_name="fake")
+
+    monkeypatch.setattr(plugin, "_create_backend", lambda backend_name, stream_id, log_prefix: FakeBackend())
+
+    result = await plugin._execute_backend(
+        "gpt_sovits",
+        "我帮你缩到两三个最合适的 desuwa",
+        "stream-1",
+        "[test]",
+        voice="voice-style",
+        emotion="happy",
+    )
+
+    assert result.success is True
+    assert result.message == "我帮你缩到两三个最合适的 ですわ|voice-style|happy"

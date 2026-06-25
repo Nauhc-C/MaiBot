@@ -598,12 +598,22 @@ class MaisakaReasoningEngine:
             if selected_tool_call is not None:
                 break
 
-            invalid_tool_names = [
+            returned_tool_names = [
                 str(tool_call.func_name).strip()
                 for tool_call in response.tool_calls
                 if str(tool_call.func_name).strip()
             ]
-            invalid_tool_text = "、".join(invalid_tool_names) if invalid_tool_names else "无工具"
+            if not returned_tool_names:
+                logger.warning(
+                    f"{self._runtime.log_prefix} Timing Gate 未返回任何控制工具调用，将按 no_action 处理"
+                )
+                self._runtime._enter_stop_state()
+                tool_result_summaries.append(
+                    "- no_action [缺少 Timing 工具]: 未返回任何控制工具调用，已停止本轮并等待新消息"
+                )
+                return "no_action", response, tool_result_summaries, tool_monitor_results
+
+            invalid_tool_text = "、".join(returned_tool_names)
             self._append_timing_gate_invalid_tool_hint(invalid_tool_text)
             remaining_attempts = TIMING_GATE_MAX_ATTEMPTS - attempt_index - 1
             if remaining_attempts > 0:

@@ -22,9 +22,10 @@ from src.llm_models.payload_content.message import Message, MessageBuilder, Role
 from src.llm_models.payload_content.resp_format import RespFormat
 from src.llm_models.payload_content.tool_option import ToolCall, ToolDefinitionInput, ToolOption, normalize_tool_options
 from src.plugin_runtime.hook_payloads import (
-    deserialize_prompt_messages,
     deserialize_tool_calls,
+    rehydrate_prompt_messages_from_hook,
     serialize_prompt_messages,
+    serialize_prompt_messages_for_hook,
     serialize_tool_calls,
     serialize_tool_definitions,
 )
@@ -937,9 +938,10 @@ class MaisakaChatLoopService:
         else:
             all_tools = [*get_builtin_tools(), *self._extra_tools]
 
+        serialized_messages, image_ref_store = serialize_prompt_messages_for_hook(built_messages)
         before_request_result = await self._get_runtime_manager().invoke_hook(
             "maisaka.planner.before_request",
-            messages=serialize_prompt_messages(built_messages),
+            messages=serialized_messages,
             tool_definitions=serialize_tool_definitions(all_tools),
             selected_history_count=len(selected_history),
             built_message_count=len(built_messages),
@@ -950,7 +952,7 @@ class MaisakaChatLoopService:
         raw_messages = before_request_kwargs.get("messages")
         if isinstance(raw_messages, list):
             try:
-                built_messages = deserialize_prompt_messages(raw_messages)
+                built_messages = rehydrate_prompt_messages_from_hook(raw_messages, image_ref_store)
             except Exception as exc:
                 logger.warning(f"Hook maisaka.planner.before_request 返回的 messages 无法反序列化，已忽略: {exc}")
         if enable_visual_message:

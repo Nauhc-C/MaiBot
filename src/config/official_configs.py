@@ -5121,6 +5121,20 @@ class PluginRuntimeConfig(ConfigBase):
     )
     """单个阻塞 Hook 最多允许运行多久。"""
 
+    max_frame_size_mb: int = Field(
+        default=64,
+        json_schema_extra={
+            "label": {
+                "zh_CN": "IPC 最大帧大小(MB)",
+                "en_US": "IPC max frame size (MB)",
+                "ja_JP": "IPC 最大フレームサイズ(MB)",
+            },
+            "x-widget": "number",
+            "x-icon": "package",
+        },
+    )
+    """Host 与插件 Runner 之间单帧消息的最大字节数（MB）；多模态消息较大时可上调。"""
+
     ipc_socket_path: str = Field(
         default="",
         json_schema_extra={

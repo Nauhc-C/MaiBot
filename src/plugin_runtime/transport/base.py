@@ -9,13 +9,45 @@
 
 import asyncio
 import contextlib
+import os
 import struct
 from abc import ABC, abstractmethod
 from typing import Awaitable, Callable
 
 # 分帧常量
 FRAME_HEADER_SIZE = 4  # 4 字节长度前缀
-MAX_FRAME_SIZE = 16 * 1024 * 1024  # 16 MB 最大帧大小
+
+# Host spawn Runner 时通过该环境变量下发最大帧大小（字节），使 Host 与 Runner 两端一致。
+ENV_MAX_FRAME_SIZE = "MAIBOT_MAX_FRAME_SIZE"
+_DEFAULT_MAX_FRAME_SIZE = 64 * 1024 * 1024  # 64 MB 默认最大帧大小
+
+
+def _read_max_frame_size_from_env() -> int:
+    """从环境变量读取最大帧大小，非法或缺省时回退默认值。"""
+    raw_value = os.environ.get(ENV_MAX_FRAME_SIZE, "")
+    if not raw_value:
+        return _DEFAULT_MAX_FRAME_SIZE
+    try:
+        parsed_value = int(raw_value)
+    except ValueError:
+        return _DEFAULT_MAX_FRAME_SIZE
+    return parsed_value if parsed_value > 0 else _DEFAULT_MAX_FRAME_SIZE
+
+
+MAX_FRAME_SIZE = _read_max_frame_size_from_env()  # 当前生效的最大帧大小
+
+
+def set_max_frame_size(max_frame_size: int) -> None:
+    """更新当前进程的最大帧大小，并写回环境变量，使后续 spawn 的 Runner 继承同一限制。
+
+    Args:
+        max_frame_size: 新的最大帧大小（字节），必须大于 0。
+    """
+    global MAX_FRAME_SIZE
+    if max_frame_size <= 0:
+        raise ValueError(f"最大帧大小必须大于 0: {max_frame_size}")
+    MAX_FRAME_SIZE = max_frame_size
+    os.environ[ENV_MAX_FRAME_SIZE] = str(max_frame_size)
 
 
 class ConnectionClosed(Exception):

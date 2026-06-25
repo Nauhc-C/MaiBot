@@ -45,7 +45,11 @@ from src.maisaka.context.planner_messages import extract_quote_ids_from_message_
 from src.maisaka.display.prompt_cli_renderer import PromptCLIVisualizer
 from src.maisaka.memory.mid_term import is_mid_term_memory_message
 from src.maisaka.visual.message_limiter import limit_latest_images_in_messages
-from src.plugin_runtime.hook_payloads import deserialize_prompt_messages, serialize_prompt_messages
+from src.plugin_runtime.hook_payloads import (
+    rehydrate_prompt_messages_from_hook,
+    serialize_prompt_messages,
+    serialize_prompt_messages_for_hook,
+)
 
 from .local_mai_replyer import build_local_mai_replyer_messages
 from .maisaka_expression_selector import maisaka_expression_selector
@@ -68,25 +72,6 @@ class MaisakaReplyContext:
 
 class BaseMaisakaReplyGenerator:
     """Maisaka replyer 的共享实现。"""
-
-    _CATCHPHRASE_STYLE_POLICY = (
-        "句尾时不时加上 desuwa，也可偶尔用 desuno、teyo、maa；但不要每句都加，整条最多一次；"
-        "如果上一条你自己的消息已经用了口癖，这一条就不要再用。"
-    )
-    _STALE_CATCHPHRASE_STYLE_SNIPPETS = (
-        "一半的对话中带有口癖，带有口癖的对话中默认使用desuwa；",
-        "desuno比 desuwa 稍微多一点追问感、确认感，比如“是这样吗，desuno？”；",
-        "teyo更像轻微强调或带一点催促，比如“请别这样说，teyo”；",
-        "maa相当于“嘛”或“怎么说呢“；",
-        "默认不用口癖；只在撒娇、收尾、轻确认时偶尔用一次，整条最多一次；最近两条你自己的消息如果已经用了口癖，这一条就不要再用。",
-        "默认少用口癖；可在撒娇、收尾、轻确认时偶尔用一次，整条最多一次；最近两条你自己的消息如果已经用了口癖，这一条就不要再用。",
-        "时不时带一点口癖；带口癖时可优先用 desuwa，也可自然使用 desuno、teyo、maa；整条最多一次；最近两条你自己的消息如果已经用了口癖，这一条就不要再用。",
-        "时不时带一点口癖；带口癖时可优先用 desuwa，也可自然使用 desuno、teyo、maa；",
-        "时不时带一点口癖；带口癖时可优先用desuwa，也可自然使用desuno、teyo、maa；",
-        "句尾时不时加上 desuwa，也可偶尔用 desuno、teyo、maa；但不要每句都加，整条最多一次；如果上一条你自己的消息已经用了口癖，这一条就不要再用。",
-        "句尾时不时加上desuwa，也可偶尔用desuno、teyo、maa，但不要每句都加；",
-    )
-    _CATCHPHRASE_PATTERN = re.compile(r"(?<![A-Za-z])(desuwa|desuno|teyo|maa)(?![A-Za-z])", re.IGNORECASE)
 
     def __init__(
         self,
@@ -129,14 +114,7 @@ class BaseMaisakaReplyGenerator:
     @classmethod
     def _select_reply_style(cls) -> str:
         """返回 replyer 使用的基础表达风格。"""
-        reply_style = global_config.personality.reply_style.strip()
-        for stale_snippet in cls._STALE_CATCHPHRASE_STYLE_SNIPPETS:
-            reply_style = reply_style.replace(stale_snippet, "")
-
-        normalized_reply_style = reply_style.strip(" \t\r\n；;，,")
-        if normalized_reply_style:
-            return f"{normalized_reply_style}\n{cls._CATCHPHRASE_STYLE_POLICY}"
-        return cls._CATCHPHRASE_STYLE_POLICY
+        return global_config.personality.reply_style.strip()
 
     @staticmethod
     def _select_temporary_reply_style() -> str:
@@ -164,54 +142,23 @@ class BaseMaisakaReplyGenerator:
 
     @staticmethod
     def _extract_visible_assistant_reply(message: AssistantMessage) -> str:
-        del message
-        return ""
+        """提取内部 assistant 消息的可见文本。"""
+        return BaseMaisakaReplyGenerator._normalize_content(message.processed_plain_text.strip())
 
     def _extract_guided_bot_reply(self, message: SessionBackedMessage) -> str:
-        # 只能根据结构化来源字段判断是否为 bot 自身写回的历史消息，
-        # 不能依赖昵称/群名片等可控文本，避免误判和提示注入。
+        """提取写回历史的 bot 自己回复文本。"""
         if message.source_kind != "guided_reply":
             return ""
 
         plain_text = message.processed_plain_text.strip()
-        _, body = parse_speaker_content(plain_text)
-        normalized_body = body.strip()
-        return self._normalize_content(normalized_body) if normalized_body else ""
-
-    @classmethod
-    def _contains_catchphrase(cls, content: str) -> bool:
-        """判断文本中是否出现了受控口癖。"""
-        return bool(cls._CATCHPHRASE_PATTERN.search((content or "").strip()))
-
-    def _collect_recent_bot_reply_texts(
-        self,
-        chat_history: List[LLMContextMessage],
-        limit: int = 3,
-    ) -> List[str]:
-        """收集最近几条 bot 自己的可见回复文本。"""
-        recent_reply_texts: List[str] = []
-        for message in reversed(chat_history):
-            visible_reply = ""
-            if isinstance(message, SessionBackedMessage):
-                visible_reply = self._extract_guided_bot_reply(message)
-            elif isinstance(message, AssistantMessage):
-                visible_reply = self._extract_visible_assistant_reply(message)
-
-            if not visible_reply:
-                continue
-
-            recent_reply_texts.append(visible_reply)
-            if len(recent_reply_texts) >= limit:
-                break
-
-        return recent_reply_texts
-
-    def _build_recent_catchphrase_requirement(self, chat_history: List[LLMContextMessage]) -> str:
-        """根据最近自发消息决定是否禁止本轮继续使用口癖。"""
-        recent_reply_texts = self._collect_recent_bot_reply_texts(chat_history, limit=1)
-        if not any(self._contains_catchphrase(reply_text) for reply_text in recent_reply_texts):
+        if not plain_text:
             return ""
-        return "硬性要求：上一条你自己的消息里已经出现过 desuwa/desuno/teyo/maa，这条不要再用口癖，用自然中文表达。"
+
+        _speaker_name, body = parse_speaker_content(plain_text)
+        normalized_body = body.strip() if body is not None else plain_text
+        if not normalized_body:
+            normalized_body = plain_text
+        return self._normalize_content(normalized_body)
 
     def _build_target_message_block(self, reply_message: Optional[SessionMessage]) -> str:
         if reply_message is None:
@@ -531,9 +478,6 @@ class BaseMaisakaReplyGenerator:
             reply_reference_lines.append(f"【最新推理】\n{reply_reason.strip()}")
         if reply_reference_lines:
             sections.append("【回复信息参考】\n" + "\n\n".join(reply_reference_lines))
-        recent_catchphrase_requirement = self._build_recent_catchphrase_requirement(chat_history)
-        if recent_catchphrase_requirement:
-            sections.append(recent_catchphrase_requirement)
         if reply_requirements.strip():
             sections.append(reply_requirements.strip())
         if keywords_reaction_prompt.strip():
@@ -654,9 +598,10 @@ class BaseMaisakaReplyGenerator:
         """触发 replyer 模型请求前 Hook，允许插件改写最终 messages。"""
 
         try:
+            serialized_messages, image_ref_store = serialize_prompt_messages_for_hook(request_messages)
             hook_result = await self._get_runtime_manager().invoke_hook(
                 "maisaka.replyer.before_model_request",
-                messages=serialize_prompt_messages(request_messages),
+                messages=serialized_messages,
                 session_id=session_id,
                 request_type=self.request_type,
                 task_name=active_task_name,
@@ -680,7 +625,7 @@ class BaseMaisakaReplyGenerator:
             return request_messages
 
         try:
-            return deserialize_prompt_messages(raw_messages)
+            return rehydrate_prompt_messages_from_hook(raw_messages, image_ref_store)
         except Exception as exc:
             logger.warning(f"Hook maisaka.replyer.before_model_request 返回的 messages 无法反序列化，已忽略: {exc}")
             return request_messages

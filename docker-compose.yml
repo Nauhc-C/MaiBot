@@ -1,6 +1,10 @@
 services:
   core:
+    profiles:
+      - manual
     container_name: maim-bot-core
+    # 当前项目默认使用“Docker NapCat + 本地 MaiBot”组合。
+    # 只有在你明确想跑 Docker 版 MaiBot core 时，再手动启用该 profile。
     #### prod ####
     image: sengokucola/maibot:latest
     # image: infinitycat/maibot:latest
@@ -66,7 +70,10 @@ services:
     networks:
       - maim_bot
   sqlite-web:
+    profiles:
+      - tools
     # 注意：coleifer/sqlite-web 镜像不支持arm64
+    # 仅用于临时查看数据库，不参与主聊天链路。
     image: coleifer/sqlite-web
     container_name: sqlite-web
     restart: always

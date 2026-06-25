@@ -48,6 +48,7 @@ from src.plugin_runtime.host.hook_dispatcher import HookDispatchResult, HookDisp
 from src.plugin_runtime.host.hook_spec_registry import HookSpec, HookSpecRegistry
 from src.plugin_runtime.protocol.envelope import InspectPluginConfigResultPayload
 from src.plugin_runtime.runner.manifest_validator import ManifestValidator, is_reserved_plugin_directory
+from src.plugin_runtime.transport.base import set_max_frame_size
 
 if TYPE_CHECKING:
     from src.chat.message_receive.message import SessionMessage
@@ -499,6 +500,9 @@ class PluginRuntimeManager(
         if not _cfg.enabled:
             logger.info("插件运行时已在配置中禁用，跳过启动")
             return
+
+        # 在拉起任何 Runner 子进程之前确定 IPC 最大帧大小，使 Host 与 Runner 两端一致。
+        set_max_frame_size(max(int(_cfg.max_frame_size_mb), 1) * 1024 * 1024)
 
         builtin_dirs, third_party_dirs = self._resolve_runtime_plugin_dirs()
 
