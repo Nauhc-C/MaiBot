@@ -369,6 +369,10 @@ actionlint
 dist-electron/
 packages/
 
+# Local code intelligence index and personal launch/runtime artifacts
+/.codegraph/
+/work/
+
 ## Claude Code and OMC data
 .claude/
 .omc/
