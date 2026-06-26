@@ -124,7 +124,7 @@ def build_planner_user_prefix_from_session_message(
     """
 
     user_info = message.message_info.user_info
-    user_name = user_info.user_nickname or user_info.user_id
+    user_name = user_info.user_cardname or user_info.user_nickname or user_info.user_id
     return build_planner_prefix(
         timestamp=message.timestamp,
         user_name=user_name,
