@@ -1,0 +1,16 @@
+[plugin]
+enabled = true
+config_version = "1.0.0"
+
+[broker]
+skill_roots = [
+  "D:\\Sakiko\\.codex\\skills",
+  "D:\\Sakiko\\.agents\\skills",
+  "D:\\Sakiko\\project\\MaiBot\\.codex\\skills",
+  "D:\\Sakiko\\project\\MaiBot\\.agents\\skills",
+]
+max_search_results = 5
+max_catalog_skills_in_description = 30
+max_body_chars = 20000
+allow_reference_files = true
+allow_script_execution = false

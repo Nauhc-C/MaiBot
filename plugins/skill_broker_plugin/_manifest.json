@@ -1,0 +1,36 @@
+{
+  "manifest_version": 2,
+  "version": "1.0.0",
+  "name": "Skill Broker 插件",
+  "description": "读取本地标准 SKILL.md 技能包，并以 catalog/search/load 工具提供给 Maisaka planner。",
+  "author": {
+    "name": "OpenAI Codex",
+    "url": "https://openai.com"
+  },
+  "license": "GPL-v3.0-or-later",
+  "urls": {
+    "repository": "https://github.com/MaiM-with-u/maibot",
+    "homepage": "https://github.com/MaiM-with-u/maibot",
+    "documentation": "https://github.com/MaiM-with-u/maibot",
+    "issues": "https://github.com/MaiM-with-u/maibot/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.99.99"
+  },
+  "sdk": {
+    "min_version": "2.0.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": [
+    "config.get"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "id": "openai-codex.skill-broker-plugin"
+}
