@@ -1,0 +1,31 @@
+{
+  "manifest_version": 2,
+  "version": "1.0.0",
+  "id": "maibot-team.context-injector",
+  "name": "关键词上下文注入器",
+  "description": "在最近对话命中关键词时，把预设背景事实注入 Maisaka planner/replyer 请求。",
+  "author": {
+    "name": "OpenAI Codex",
+    "url": "https://openai.com"
+  },
+  "license": "GPL-v3.0-or-later",
+  "urls": {
+    "repository": "https://github.com/MaiM-with-u/maibot",
+    "homepage": "https://github.com/MaiM-with-u/maibot",
+    "documentation": "https://github.com/MaiM-with-u/maibot",
+    "issues": "https://github.com/MaiM-with-u/maibot/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.99.99"
+  },
+  "sdk": {
+    "min_version": "2.0.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": [],
+  "i18n": {
+    "default_locale": "zh-CN"
+  }
+}

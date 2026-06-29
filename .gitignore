@@ -358,10 +358,12 @@ run_pet.bat
 !/plugins/emoji_manage_plugin
 !/plugins/skill_broker_plugin
 !/plugins/layered_emoji_plugin
+!/plugins/context_injector_plugin
 !/plugins/__init__.py
 
 config.toml
 !/plugins/skill_broker_plugin/config.toml
+!/plugins/context_injector_plugin/config.toml
 
 interested_rates.txt
 MaiBot.code-workspace

@@ -1,0 +1,14 @@
+[plugin]
+enabled = true
+config_version = "1.0.0"
+
+[matching]
+recent_user_message_limit = 8
+
+[[rules]]
+enabled = false
+name = "初华当前处境"
+keywords = ["初华", "三角初华"]
+context = "三角初华现在正在和祥子住在一起，祥子睡阁楼。"
+inject_to_planner = true
+inject_to_replyer = true
