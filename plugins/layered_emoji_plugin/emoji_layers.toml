@@ -1,0 +1,26 @@
+# 分层表情包资产清单
+#
+# emoji_map 使用表情文件 hash 作为键，值为该表情所属层 ID 列表。
+# 未出现在 emoji_map 中的表情会被视为 unclassified，是否参与选择由插件配置控制。
+
+[[layers.items]]
+id = "octopus_xiang"
+name = "章鱼小祥系列"
+weight = 1.0
+enabled_by_default = true
+
+[[layers.items]]
+id = "q_xiang"
+name = "Q版小祥系列"
+weight = 1.0
+enabled_by_default = true
+
+[[layers.items]]
+id = "original_xiang"
+name = "原图小祥系列"
+weight = 1.0
+enabled_by_default = true
+
+[emoji_map]
+# 示例：
+# "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" = ["q_xiang"]

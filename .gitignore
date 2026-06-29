@@ -357,6 +357,7 @@ run_pet.bat
 !/plugins/hello_world_plugin
 !/plugins/emoji_manage_plugin
 !/plugins/skill_broker_plugin
+!/plugins/layered_emoji_plugin
 !/plugins/__init__.py
 
 config.toml
