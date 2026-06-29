@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 import types
@@ -74,7 +75,9 @@ def _build_plugin(module):
     plugin.config = module.DesuwaDensityPluginConfig()
     plugin.ctx = types.SimpleNamespace(
         message=types.SimpleNamespace(get_recent=None),
-        logger=types.SimpleNamespace(info=lambda *args, **kwargs: None),
+        logger=types.SimpleNamespace(info=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None),
+        call_capability=None,
+        config=types.SimpleNamespace(get=None),
     )
     return plugin
 
@@ -133,19 +136,52 @@ def test_maybe_patch_response_strips_trailing_catchphrase_when_last_message_used
 def test_before_request_merges_extra_prompt_with_frequency_instruction() -> None:
     module = _load_plugin_module()
     plugin = _build_plugin(module)
+    captured_kwargs = {}
+    now = datetime.now()
 
     async def fake_get_recent(**kwargs):
-        del kwargs
+        captured_kwargs.update(kwargs)
         return {
             "success": True,
             "messages": [
-                {"message_id": "1", "timestamp": "2026-06-24 15:00:00", "processed_plain_text": "今天好热"},
-                {"message_id": "2", "timestamp": "2026-06-24 15:01:00", "processed_plain_text": "真的不想上班"},
-                {"message_id": "3", "timestamp": "2026-06-24 15:02:00", "processed_plain_text": "你先喝水"},
+                {
+                    "message_id": "1",
+                    "platform": "qq",
+                    "message_info": {"user_info": {"user_id": "bot-1"}},
+                    "timestamp": (now - timedelta(minutes=3)).isoformat(sep=" "),
+                    "processed_plain_text": "今天好热",
+                },
+                {
+                    "message_id": "2",
+                    "platform": "qq",
+                    "message_info": {"user_info": {"user_id": "user-2"}},
+                    "timestamp": (now - timedelta(minutes=2)).isoformat(sep=" "),
+                    "processed_plain_text": "真的不想上班",
+                },
+                {
+                    "message_id": "3",
+                    "platform": "qq",
+                    "message_info": {"user_info": {"user_id": "bot-1"}},
+                    "timestamp": (now - timedelta(minutes=1)).isoformat(sep=" "),
+                    "processed_plain_text": "你先喝水",
+                },
             ],
         }
 
-    plugin.ctx.message.get_recent = fake_get_recent
+    async def fake_call_capability(capability, **kwargs):
+        if capability == "message.get_recent":
+            return await fake_get_recent(**kwargs)
+        raise AssertionError(capability)
+
+    async def fake_get_config(key, default=None):
+        config_values = {
+            "bot.qq_account": "bot-1",
+            "bot.platforms": [],
+        }
+        return config_values.get(key, default)
+
+    plugin.ctx.call_capability = fake_call_capability
+    plugin.ctx.config.get = fake_get_config
 
     result = asyncio.run(
         plugin.regulate_desuwa_before_request(
@@ -165,6 +201,9 @@ def test_before_request_merges_extra_prompt_with_frequency_instruction() -> None
     )
 
     assert result["action"] == "continue"
+    assert captured_kwargs["chat_id"] == "qq_private_DEVELOPER_ACCOUNT_ID"
+    assert captured_kwargs["limit"] >= 16
+    assert captured_kwargs["hours"] == plugin.config.density.lookback_hours
     merged_prompt = result["modified_kwargs"]["extra_prompt"]
     assert "先回答问题" in merged_prompt
     assert "优先在句尾带一个 desuwa" in merged_prompt

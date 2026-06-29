@@ -41,7 +41,11 @@ from src.maisaka.context.messages import (
     ToolResultMessage,
     build_llm_message_from_context,
 )
-from src.maisaka.context.history import normalize_tool_call_result_pairs
+from src.maisaka.context.history import (
+    DEFAULT_CONTEXT_TIME_WINDOW_MINUTES,
+    filter_history_by_time_window,
+    normalize_tool_call_result_pairs,
+)
 from src.maisaka.memory.mid_term import is_mid_term_memory_message
 from src.maisaka.display.prompt_cli_renderer import PromptCLIVisualizer
 from src.maisaka.focus import focus_mode_manager
@@ -1100,11 +1104,16 @@ class MaisakaChatLoopService:
         request_kind: str = "planner",
         max_context_size: Optional[int] = None,
         is_group_chat: Optional[bool] = None,
+        time_window_minutes: int = DEFAULT_CONTEXT_TIME_WINDOW_MINUTES,
     ) -> tuple[List[LLMContextMessage], str]:
         """选择LLM上下文消息"""
 
-        filtered_history = MaisakaChatLoopService._filter_history_for_request_kind(
+        filtered_history = filter_history_by_time_window(
             chat_history,
+            time_window_minutes=time_window_minutes,
+        )
+        filtered_history = MaisakaChatLoopService._filter_history_for_request_kind(
+            filtered_history,
             request_kind=request_kind,
         )
         base_context_size = max(1, int(max_context_size or global_config.chat.max_context_size))

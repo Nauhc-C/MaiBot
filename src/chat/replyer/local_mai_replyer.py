@@ -2,7 +2,14 @@ from typing import Any, Dict, List
 
 from src.llm_models.payload_content.message import Message, MessageBuilder, RoleType
 
-LOCAL_MAI_REPLYER_SYSTEM_PROMPT = "请根据给你的思考内容生成一条回复：只输出最终要发送的实际发言内容。"
+LOCAL_MAI_REPLYER_SYSTEM_PROMPT = (
+    "请根据给你的思考内容生成一条回复：只输出最终要发送的实际发言内容。"
+    "如需引用，请遵循上游指引并明确选择是否引用。"
+)
+LOCAL_MAI_REPLYER_CATCHPHRASE_BLOCK_PROMPT = (
+    "这次回复是复读/重放/转述场景，禁止使用 desuwa、desuno、teyo、maa 等尾部口癖。"
+    "保持自然、克制、尽量贴近原意，不要额外加个性化结尾。"
+)
 
 
 def resolve_local_mai_replyer_input(reply_reason: str, reply_tool_args: Dict[str, Any] | None = None) -> str:
@@ -13,6 +20,10 @@ def resolve_local_mai_replyer_input(reply_reason: str, reply_tool_args: Dict[str
         return latest_reason
 
     reply_guide = str((reply_tool_args or {}).get("reply_guide") or "").strip()
+    if any(bool((reply_tool_args or {}).get(marker)) for marker in ("disable_catchphrases", "no_catchphrases", "no_desuwa")):
+        if reply_guide:
+            return f"{reply_guide}\n\n{LOCAL_MAI_REPLYER_CATCHPHRASE_BLOCK_PROMPT}"
+        return LOCAL_MAI_REPLYER_CATCHPHRASE_BLOCK_PROMPT
     if reply_guide:
         return reply_guide
 

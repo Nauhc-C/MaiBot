@@ -129,6 +129,114 @@ def is_bot_self(platform: str, user_id: str) -> bool:
     return False
 
 
+def _strip_mention_markup(text: str) -> str:
+    msg_content = text
+    msg_content = re.sub(r"@(.+?)（(\d+)）", "", msg_content)
+    msg_content = re.sub(r"@<(.+?)(?=:(\d+))\:(\d+)>", "", msg_content)
+    msg_content = re.sub(r"\[回复 (.+?)\(((\d+)|未知id|你)\)：(.+?)\]，说：", "", msg_content)
+    msg_content = re.sub(r"\[回复<(.+?)(?=:(\d+))\:(\d+)>：(.+?)\]，说：", "", msg_content)
+    return msg_content.strip()
+
+
+def _is_ascii_word_char(char: str) -> bool:
+    return char.isascii() and (char.isalnum() or char == "_")
+
+
+def _has_keyword_boundaries(text: str, start: int, end: int, keyword: str) -> bool:
+    if not any(char.isascii() and char.isalnum() for char in keyword):
+        return True
+    if start > 0 and _is_ascii_word_char(text[start - 1]):
+        return False
+    if end < len(text) and _is_ascii_word_char(text[end]):
+        return False
+    return True
+
+
+def _has_direct_mention_prefix(text: str, start: int) -> bool:
+    prefix = text[:start]
+    if not prefix.strip():
+        return True
+
+    trimmed_prefix = prefix.rstrip()
+    if not trimmed_prefix:
+        return True
+    if trimmed_prefix[-1] in "，,。.!！?？:：;；、\n\r\t([{【“‘\"'":
+        return True
+
+    return trimmed_prefix.strip().lower() in {"请", "麻烦", "拜托", "喂", "嘿", "hi", "hello"}
+
+
+def _has_direct_mention_suffix(text: str, end: int) -> bool:
+    suffix = text[end:].lstrip()
+    if not suffix:
+        return True
+
+    if suffix[0] in "，,。.!！?？:：;；、~～\n\r\t ":
+        return True
+
+    direct_starts = (
+        "在吗",
+        "在不在",
+        "醒醒",
+        "出来",
+        "帮",
+        "帮忙",
+        "看",
+        "看看",
+        "看下",
+        "看一下",
+        "查",
+        "查下",
+        "查一下",
+        "解释",
+        "分析",
+        "评价",
+        "说",
+        "讲",
+        "教",
+        "问",
+        "想问",
+        "告诉",
+        "给",
+        "发",
+        "来",
+        "救",
+        "听",
+        "请",
+        "麻烦",
+        "拜托",
+        "能",
+        "可以",
+        "可不可以",
+        "要不",
+        "要不要",
+        "你",
+        "妳",
+    )
+    if suffix.startswith(direct_starts):
+        return True
+
+    return bool(re.search(r"[?？吗嘛呢]$", suffix[:24]))
+
+
+def _is_direct_bot_name_mention(text: str, keyword: str) -> bool:
+    normalized_keyword = keyword.strip()
+    if not normalized_keyword:
+        return False
+
+    flags = re.IGNORECASE if any(char.isascii() and char.isalpha() for char in normalized_keyword) else 0
+    for match in re.finditer(re.escape(normalized_keyword), text, flags=flags):
+        start, end = match.span()
+        if not _has_keyword_boundaries(text, start, end, normalized_keyword):
+            continue
+        if not _has_direct_mention_prefix(text, start):
+            continue
+        if _has_direct_mention_suffix(text, end):
+            return True
+
+    return False
+
+
 def is_mentioned_bot_in_message(message: SessionMessage) -> tuple[bool, bool, float]:
     """检查消息是否提到了机器人（统一多平台实现）"""
     text = message.processed_plain_text or ""
@@ -207,16 +315,11 @@ def is_mentioned_bot_in_message(message: SessionMessage) -> tuple[bool, bool, fl
             ):
                 is_mentioned = True
 
-    # 6) 名称/别名 提及（去除 @/回复标记后再匹配）
+    # 6) 名称/别名直接称呼（去除 @/回复标记后再匹配）
     if not is_mentioned and keywords:
-        msg_content = text
-        # 去除各种 @ 与 回复标记，避免误判
-        msg_content = re.sub(r"@(.+?)（(\d+)）", "", msg_content)
-        msg_content = re.sub(r"@<(.+?)(?=:(\d+))\:(\d+)>", "", msg_content)
-        msg_content = re.sub(r"\[回复 (.+?)\(((\d+)|未知id|你)\)：(.+?)\]，说：", "", msg_content)
-        msg_content = re.sub(r"\[回复<(.+?)(?=:(\d+))\:(\d+)>：(.+?)\]，说：", "", msg_content)
+        msg_content = _strip_mention_markup(text)
         for kw in keywords:
-            if kw and kw in msg_content:
+            if _is_direct_bot_name_mention(msg_content, kw):
                 is_mentioned = True
                 break
 

@@ -16,6 +16,14 @@ def test_build_reply_requirements_includes_planner_reply_guide() -> None:
     assert "【额外回复要求】" in requirement
     assert "【Planner回复指引】" in requirement
     assert "先回答 A-SOUL 的基础信息" in requirement
+    assert "【引用回复策略】" in requirement
+
+
+def test_build_reply_requirements_sets_explicit_quote_policy() -> None:
+    requirement = BaseMaisakaReplyGenerator._build_reply_requirements("", [], {})
+
+    assert "set_quote=true" in requirement
+    assert "set_quote=false" in requirement
 
 
 class _DummyReplyGenerator(BaseMaisakaReplyGenerator):

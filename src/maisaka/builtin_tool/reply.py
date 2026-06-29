@@ -9,6 +9,7 @@ from src.common.data_models.reply_generation_data_models import ReplyGenerationR
 from src.common.logger import get_logger
 from src.config import config as config_module
 from src.core.tooling import ToolExecutionContext, ToolExecutionResult, ToolInvocation, ToolSpec
+from src.maisaka.context.history import DEFAULT_CONTEXT_TIME_WINDOW_MINUTES, filter_history_by_time_window
 from src.maisaka.context.message_adapter import build_visible_text_from_sequence
 from src.services import send_service
 
@@ -16,6 +17,17 @@ from .context import BuiltinToolRuntimeContext
 
 logger = get_logger("maisaka_builtin_reply")
 _REPLY_TOOL_INTERNAL_ARGUMENTS = {"msg_id", "set_quote", "reference_info"}
+_REPLAY_CATCHPHRASE_MARKERS = (
+    "复读",
+    "重复",
+    "replay",
+    "repeat",
+    "echo",
+    "照着说",
+    "照着发",
+    "原样",
+    "照搬",
+)
 
 
 async def _run_expression_selector(tool_ctx: BuiltinToolRuntimeContext, system_prompt: str) -> str:
@@ -43,12 +55,15 @@ def get_tool_spec() -> ToolSpec:
                 },
                 "set_quote": {
                     "type": "boolean",
-                    "description": "以引用回复的方式发送这条回复，不用每句都引用。",
-                    "default": True,
+                    "description": "是否使用引用回复；由模型根据上下文自行判断，建议显式传 true 或 false。",
                 },
                 "reply_guide": {
                     "type": "string",
                     "description": "回复需要注意的事项和回复指引",
+                },
+                "disable_catchphrases": {
+                    "type": "boolean",
+                    "description": "是否禁止 desuwa 等口癖；可用于复读、转述或重放类回复。",
                 },
             },
             "required": ["msg_id"],
@@ -86,6 +101,26 @@ def _build_send_result(
     }
 
 
+def _coerce_optional_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized_value = str(value).strip().lower()
+    if normalized_value in {"1", "true", "yes", "on", "retry"}:
+        return True
+    if normalized_value in {"0", "false", "no", "off", "continue"}:
+        return False
+    return default
+
+
+def _looks_like_replay(*texts: str) -> bool:
+    """判断本次回复是否像复读/重放场景。"""
+
+    normalized_text = " ".join(text for text in texts if text).lower()
+    return any(marker.lower() in normalized_text for marker in _REPLAY_CATCHPHRASE_MARKERS)
+
+
 async def handle_tool(
     tool_ctx: BuiltinToolRuntimeContext,
     invocation: ToolInvocation,
@@ -95,12 +130,16 @@ async def handle_tool(
 
     latest_thought = context.reasoning if context is not None else invocation.reasoning
     target_message_id = str(invocation.arguments.get("msg_id") or "").strip()
-    set_quote = bool(invocation.arguments.get("set_quote", True))
+    set_quote = _coerce_optional_bool(invocation.arguments.get("set_quote"), default=False)
     reply_tool_args = {
         key: value
         for key, value in dict(invocation.arguments or {}).items()
         if key not in _REPLY_TOOL_INTERNAL_ARGUMENTS
     }
+    if not _coerce_optional_bool(reply_tool_args.get("disable_catchphrases"), default=False):
+        reply_guide = str(reply_tool_args.get("reply_guide") or "")
+        if _looks_like_replay(latest_thought or "", reply_guide):
+            reply_tool_args["disable_catchphrases"] = True
     enable_reply_quote = bool(config_module.global_config.chat.enable_reply_quote)
     effective_set_quote = set_quote and enable_reply_quote
 
@@ -138,7 +177,10 @@ async def handle_tool(
             "Maisaka 回复生成器当前不可用。",
         )
 
-    replyer_chat_history = list(tool_ctx.runtime._chat_history)
+    replyer_chat_history = filter_history_by_time_window(
+        list(tool_ctx.runtime._chat_history),
+        time_window_minutes=DEFAULT_CONTEXT_TIME_WINDOW_MINUTES,
+    )
     try:
         success, reply_result = await replyer.generate_reply_with_context(
             reply_reason=latest_thought,

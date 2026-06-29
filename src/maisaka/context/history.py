@@ -1,5 +1,6 @@
 ﻿"""Maisaka 历史消息处理辅助工具。"""
 
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from src.common.data_models.message_component_data_model import MessageSequence, ReplyComponent, TextComponent
@@ -12,6 +13,7 @@ if TYPE_CHECKING:
 
 TOOL_RESULT_MEDIA_SOURCE_KIND = "tool_result_media"
 OPTIMIZED_TOOL_HISTORY_SOURCE_KIND = "optimized_tool_history"
+DEFAULT_CONTEXT_TIME_WINDOW_MINUTES = 30
 
 
 def build_prefixed_message_sequence(
@@ -59,6 +61,21 @@ def build_session_message_visible_text(
             continue
         visible_sequence.components.append(component)
     return build_visible_text_from_sequence(visible_sequence).strip()
+
+
+def filter_history_by_time_window(
+    chat_history: list[LLMContextMessage],
+    *,
+    time_window_minutes: int = DEFAULT_CONTEXT_TIME_WINDOW_MINUTES,
+) -> list[LLMContextMessage]:
+    """按发言时间显式截断历史，只保留最近时间窗内的消息。"""
+
+    normalized_time_window_minutes = max(0, int(time_window_minutes))
+    if normalized_time_window_minutes <= 0:
+        return list(chat_history)
+
+    cutoff_time = datetime.now() - timedelta(minutes=normalized_time_window_minutes)
+    return [message for message in chat_history if message.timestamp >= cutoff_time]
 
 
 def drop_leading_orphan_tool_results(

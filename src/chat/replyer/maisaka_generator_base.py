@@ -33,6 +33,7 @@ from src.config.model_configs import ModelInfo
 from src.core.types import ActionInfo
 from src.llm_models.payload_content.message import Message, MessageBuilder, RoleType
 from src.maisaka.context.message_adapter import parse_speaker_content
+from src.maisaka.context.history import DEFAULT_CONTEXT_TIME_WINDOW_MINUTES, filter_history_by_time_window
 from src.maisaka.context.messages import (
     AssistantMessage,
     LLMContextMessage,
@@ -58,6 +59,11 @@ logger = get_logger("replyer")
 
 DEBUG_REPLY_CACHE_DIR = Path("logs/debug_reply_cache")
 REPLYER_MAX_HOOK_RETRIES = 3
+_CATCHPHRASE_BLOCKLIST_MARKERS = (
+    "disable_catchphrases",
+    "no_catchphrases",
+    "no_desuwa",
+)
 TOOL_RESULT_MEDIA_SOURCE_KIND = "tool_result_media"
 
 
@@ -684,6 +690,19 @@ class BaseMaisakaReplyGenerator:
         normalized_reply_guide = str((reply_tool_args or {}).get("reply_guide") or "").strip()
         if normalized_reply_guide:
             blocks.append(f"【Planner回复指引】\n{normalized_reply_guide}")
+        if any(bool((reply_tool_args or {}).get(marker)) for marker in _CATCHPHRASE_BLOCKLIST_MARKERS):
+            blocks.append(
+                "【复读口癖限制】\n"
+                "这次回复是复读/重放/转述场景，禁止使用 desuwa、desuno、teyo、maa 等尾部口癖。"
+                "保持自然、克制、尽量贴近原意，不要额外加个性化结尾。"
+            )
+        blocks.append(
+            "【引用回复策略】\n"
+            "是否引用由你自己判断。"
+            "只有当直接指向对方上一条发言、需要明确承接语境、或引用能提升可读性时才引用；"
+            "如果只是普通接话、闲聊、顺着话题继续，不要强制引用。"
+            "如果你决定引用，请在 reply 工具里显式传 set_quote=true；不需要引用时传 set_quote=false。"
+        )
         if retry_constraints:
             retry_lines = ["【重生成约束】"]
             retry_lines.extend(retry_constraints[-REPLYER_MAX_HOOK_RETRIES:])
@@ -786,6 +805,19 @@ class BaseMaisakaReplyGenerator:
         """replyer 只接收真实聊天上下文，不接收参考、工具结果、工具媒体和中期摘要。"""
 
         return not cls._is_replyer_filtered_history_message(message)
+
+    @staticmethod
+    def _filter_replyer_history_by_time_window(
+        chat_history: list[LLMContextMessage],
+        *,
+        time_window_minutes: int = DEFAULT_CONTEXT_TIME_WINDOW_MINUTES,
+    ) -> list[LLMContextMessage]:
+        """按时间窗进一步截断 replyer 输入历史。"""
+
+        return filter_history_by_time_window(
+            chat_history,
+            time_window_minutes=time_window_minutes,
+        )
 
     async def _generate_local_mai_reply_with_context(
         self,
@@ -982,7 +1014,10 @@ class BaseMaisakaReplyGenerator:
         #     f"历史条数={len(chat_history)} 目标ID={reply_message.message_id if reply_message else None}"
         # )
 
-        filtered_history = [message for message in chat_history if self._should_keep_replyer_history_message(message)]
+        filtered_history = [
+            message for message in chat_history if self._should_keep_replyer_history_message(message)
+        ]
+        filtered_history = self._filter_replyer_history_by_time_window(filtered_history)
 
         try:
             reply_context = await self._build_reply_context(

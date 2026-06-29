@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 import pytest
 import importlib
 import importlib.util
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from pathlib import Path
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
@@ -236,10 +236,143 @@ def load_utils_via_file(monkeypatch):
     return utils_module
 
 
+def load_chat_utils_via_file(monkeypatch):
+    setup_mocks(monkeypatch)
+
+    for pkg_name in [
+        "src",
+        "src.chat",
+        "src.chat.utils",
+        "src.chat.message_receive",
+        "src.config",
+        "src.person_info",
+        "src.services",
+    ]:
+        if pkg_name not in sys.modules:
+            pkg_mod = ModuleType(pkg_name)
+            pkg_mod.__path__ = []
+            monkeypatch.setitem(sys.modules, pkg_name, pkg_mod)
+
+    chat_manager_mod = ModuleType("src.chat.message_receive.chat_manager")
+    chat_manager_mod.chat_manager = SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "src.chat.message_receive.chat_manager", chat_manager_mod)
+
+    message_mod = ModuleType("src.chat.message_receive.message")
+    message_mod.SessionMessage = object
+    monkeypatch.setitem(sys.modules, "src.chat.message_receive.message", message_mod)
+
+    config_mod = ModuleType("src.config.config")
+    config_mod.global_config = SimpleNamespace(
+        bot=SimpleNamespace(
+            qq_account="bot_self",
+            platforms=[],
+            nickname="Sakiko",
+            alias_names=["sakiko"],
+        ),
+        chat=SimpleNamespace(
+            inevitable_at_reply=True,
+            mentioned_bot_reply=True,
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "src.config.config", config_mod)
+
+    person_mod = ModuleType("src.person_info.person_info")
+    person_mod.Person = object
+    monkeypatch.setitem(sys.modules, "src.person_info.person_info", person_mod)
+
+    embedding_mod = ModuleType("src.services.embedding_service")
+    embedding_mod.EmbeddingServiceClient = object
+    monkeypatch.setitem(sys.modules, "src.services.embedding_service", embedding_mod)
+
+    typo_mod = ModuleType("src.chat.utils.typo_generator")
+    typo_mod.ChineseTypoGenerator = object
+    monkeypatch.setitem(sys.modules, "src.chat.utils.typo_generator", typo_mod)
+
+    file_path = Path(__file__).parent.parent.parent / "src" / "chat" / "utils" / "utils.py"
+    spec = importlib.util.spec_from_file_location("src.chat.utils.utils", file_path)
+    utils_module = importlib.util.module_from_spec(spec)
+    utils_module.__package__ = "src.chat.utils"
+    monkeypatch.setitem(sys.modules, "src.chat.utils.utils", utils_module)
+    spec.loader.exec_module(utils_module)
+    return utils_module
+
+
+def make_mention_message(
+    text: str,
+    *,
+    platform: str = "qq",
+    message_segment: object | None = None,
+    additional_config: dict | None = None,
+):
+    return SimpleNamespace(
+        processed_plain_text=text,
+        platform=platform,
+        message_segment=message_segment,
+        is_mentioned=False,
+        is_at=False,
+        message_info=SimpleNamespace(additional_config=additional_config or {}),
+    )
+
+
 @pytest.mark.asyncio
 async def test_message_utils(monkeypatch):
     load_message_via_file(monkeypatch)
     load_utils_via_file(monkeypatch)
+
+
+def test_is_mentioned_bot_in_message_triggers_on_qq_at(monkeypatch):
+    utils_module = load_chat_utils_via_file(monkeypatch)
+    message = make_mention_message("@<Sakiko:bot_self> 帮我看下")
+
+    is_mentioned, is_at, reply_probability = utils_module.is_mentioned_bot_in_message(message)
+
+    assert is_mentioned is True
+    assert is_at is True
+    assert reply_probability == 1.0
+
+
+def test_is_mentioned_bot_in_message_triggers_on_reply_to_bot(monkeypatch):
+    utils_module = load_chat_utils_via_file(monkeypatch)
+    message = make_mention_message("[回复 Alice(bot_self)：之前的话]，说：好")
+
+    is_mentioned, is_at, reply_probability = utils_module.is_mentioned_bot_in_message(message)
+
+    assert is_mentioned is True
+    assert is_at is False
+    assert reply_probability == 1.0
+
+
+def test_is_mentioned_bot_in_message_triggers_on_direct_alias_call(monkeypatch):
+    utils_module = load_chat_utils_via_file(monkeypatch)
+    message = make_mention_message("sakiko，帮我看下")
+
+    is_mentioned, is_at, reply_probability = utils_module.is_mentioned_bot_in_message(message)
+
+    assert is_mentioned is True
+    assert is_at is False
+    assert reply_probability == 1.0
+
+
+def test_is_mentioned_bot_in_message_ignores_incidental_alias(monkeypatch):
+    utils_module = load_chat_utils_via_file(monkeypatch)
+    message = make_mention_message("我今天见到 sakiko 了")
+
+    is_mentioned, is_at, reply_probability = utils_module.is_mentioned_bot_in_message(message)
+
+    assert is_mentioned is False
+    assert is_at is False
+    assert reply_probability == 0.0
+
+
+def test_is_mentioned_bot_in_message_ignores_plain_second_person_question(monkeypatch):
+    utils_module = load_chat_utils_via_file(monkeypatch)
+    message = make_mention_message("这照片是你吗")
+
+    is_mentioned, is_at, reply_probability = utils_module.is_mentioned_bot_in_message(message)
+
+    assert is_mentioned is False
+    assert is_at is False
+    assert reply_probability == 0.0
 
 
 @pytest.mark.asyncio
