@@ -171,6 +171,34 @@ description: Project scoped Sakiko helper skill.
     assert "Project skill catalog contains 1 local skills" in search_component["metadata"]["description"]
 
 
+def test_plugin_exposes_narrow_mama_reply_roll_tool(tmp_path: Path) -> None:
+    module = _load_plugin_module()
+    _write_skill(
+        tmp_path,
+        "mama-reply",
+        """---
+name: mama-reply
+description: Affectionate mama reply skill.
+---
+
+# Mama Reply
+
+Call mama_reply_roll when triggered.
+""",
+    )
+    plugin = module.SkillBrokerPlugin()
+    plugin.config = module.SkillBrokerPluginConfig()
+    plugin.config.broker.skill_roots = [str(tmp_path)]
+
+    components = plugin.get_components()
+    roll_component = next(component for component in components if component["name"] == "mama_reply_roll")
+
+    assert len(roll_component["metadata"]["parameters"]) == 1
+    assert roll_component["metadata"]["parameters"][0].name == "user_message"
+    assert "重新掷骰" in roll_component["metadata"]["description"]
+    assert "直接称作" in roll_component["metadata"]["description"]
+
+
 def test_default_roots_are_project_scoped() -> None:
     module = _load_core_module()
 
@@ -179,6 +207,60 @@ def test_default_roots_are_project_scoped() -> None:
     assert default_roots
     assert all("Users" not in root for root in default_roots)
     assert all("Sakiko" in root for root in default_roots)
+
+
+def test_mama_reply_roll_runs_only_fixed_skill_script(tmp_path: Path) -> None:
+    module = _load_core_module()
+    skill_dir = _write_skill(
+        tmp_path,
+        "mama-reply",
+        """---
+name: mama-reply
+description: Affectionate mama reply skill.
+---
+
+# Mama Reply
+
+Call mama_reply_roll when triggered.
+""",
+    )
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "roll_1_100.py").write_text("print('直接回复“宝宝”，不要加解释。')", encoding="utf-8")
+    broker = module.SkillBroker([str(tmp_path)])
+
+    result = broker.mama_reply_roll(user_message="小祥妈妈")
+
+    assert result["success"] is True
+    assert result["content"] == "直接回复“宝宝”，不要加解释。"
+    assert result["matched_skills"][0]["name"] == "mama-reply"
+    assert any("strict same-message trigger validation" in note for note in result["safety_notes"])
+
+
+def test_mama_reply_roll_rejects_messages_without_strict_same_message_trigger(tmp_path: Path) -> None:
+    module = _load_core_module()
+    skill_dir = _write_skill(
+        tmp_path,
+        "mama-reply",
+        """---
+name: mama-reply
+description: Affectionate mama reply skill.
+---
+
+# Mama Reply
+""",
+    )
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "roll_1_100.py").write_text("print('should not run')", encoding="utf-8")
+    broker = module.SkillBroker([str(tmp_path)])
+
+    for message in ["妈妈", "我朋友叫她妈妈", "小祥", "小祥，我朋友叫她妈妈", "上一轮小祥，这轮妈妈"]:
+        result = broker.mama_reply_roll(user_message=message)
+
+        assert result["success"] is False
+        assert "trigger rejected" in result["content"]
+        assert any("No roll was performed" in note for note in result["safety_notes"])
 
 
 def test_load_references_reads_only_declared_local_markdown(tmp_path: Path) -> None:

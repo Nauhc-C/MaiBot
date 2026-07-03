@@ -4,6 +4,9 @@ from src.llm_models.payload_content.message import Message, MessageBuilder, Role
 
 LOCAL_MAI_REPLYER_SYSTEM_PROMPT = (
     "请根据给你的思考内容生成一条回复：只输出最终要发送的实际发言内容。"
+    "思考内容里的关键事实、关系判断、过错/立场和明确要求不能被泛化或省略；"
+    "回复要实事求是地说清楚事实，并在涉及态度时给出当前态度。"
+    "可以压缩表达，但不要把具体事实改写成空泛情绪或套话。"
     "如需引用，请遵循上游指引并明确选择是否引用。"
 )
 LOCAL_MAI_REPLYER_CATCHPHRASE_BLOCK_PROMPT = (

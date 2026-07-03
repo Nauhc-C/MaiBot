@@ -40,6 +40,14 @@ def _load_plugin_module():
 
         return decorator
 
+    def fake_tool(*args, **kwargs):
+        del args, kwargs
+
+        def decorator(func):
+            return func
+
+        return decorator
+
     class FakeErrorPolicy:
         SKIP = "skip"
 
@@ -49,13 +57,28 @@ def _load_plugin_module():
     class FakeHookOrder:
         NORMAL = "normal"
 
+    class FakeToolParamType:
+        STRING = "string"
+        INTEGER = "integer"
+        BOOLEAN = "boolean"
+
+    class FakeToolParameterInfo:
+        def __init__(self, name, param_type, description, required):
+            self.name = name
+            self.param_type = param_type
+            self.description = description
+            self.required = required
+
     fake_sdk.Field = fake_field
     fake_sdk.HookHandler = fake_hook_handler
     fake_sdk.MaiBotPlugin = FakeMaiBotPlugin
     fake_sdk.PluginConfigBase = FakePluginConfigBase
+    fake_sdk.Tool = fake_tool
     fake_sdk_types.ErrorPolicy = FakeErrorPolicy
     fake_sdk_types.HookMode = FakeHookMode
     fake_sdk_types.HookOrder = FakeHookOrder
+    fake_sdk_types.ToolParamType = FakeToolParamType
+    fake_sdk_types.ToolParameterInfo = FakeToolParameterInfo
 
     sys.modules["maibot_sdk"] = fake_sdk
     sys.modules["maibot_sdk.types"] = fake_sdk_types
@@ -249,3 +272,46 @@ def test_empty_messages_invalid_config_and_missing_session_continue() -> None:
     assert asyncio.run(plugin.inject_context_before_planner(messages=_messages("初华"), session_id="session-1")) == {
         "action": "continue"
     }
+
+
+def test_search_context_rules_fuzzy_searches_enabled_rules() -> None:
+    module = _load_plugin_module()
+    plugin = _build_plugin(module)
+    plugin.config.rules = [
+        _rule(module, name="角色概览：丰川清告", keywords=["丰川清告", "祥子父亲"], context="清告是祥子的父亲。"),
+        _rule(module, name="角色概览：三角初华", keywords=["三角初华", "初华"], context="初华是Ave Mujica主唱。"),
+    ]
+
+    result = asyncio.run(plugin.handle_search_context_rules(query="祥子爸爸", stream_id="session-1"))
+
+    assert result["success"] is True
+    assert result["results"][0]["name"] == "角色概览：丰川清告"
+    assert "清告是祥子的父亲" in result["content"]
+
+
+def test_search_context_rules_filters_rules_already_returned_to_session() -> None:
+    module = _load_plugin_module()
+    plugin = _build_plugin(module)
+    plugin.config.rules = [_rule(module, name="角色概览：丰川清告", keywords=["丰川清告", "祥子父亲"], context="清告是祥子的父亲。")]
+
+    first = asyncio.run(plugin.handle_search_context_rules(query="祥子父亲", stream_id="session-1"))
+    second = asyncio.run(plugin.handle_search_context_rules(query="祥子父亲", stream_id="session-1"))
+    forced = asyncio.run(
+        plugin.handle_search_context_rules(query="祥子父亲", stream_id="session-1", include_injected=True)
+    )
+
+    assert first["results"]
+    assert second["results"] == []
+    assert forced["results"]
+
+
+def test_search_context_rules_filters_automatically_injected_rules() -> None:
+    module = _load_plugin_module()
+    plugin = _build_plugin(module)
+    plugin.config.rules = [_rule(module, name="初华当前处境", keywords=["初华"], context="初华住在祥子家。")]
+
+    injection = plugin._prepare_injection_text(_messages("初华最近怎么样？"), "session-1", "planner")
+    result = asyncio.run(plugin.handle_search_context_rules(query="初华", stream_id="session-1"))
+
+    assert injection
+    assert result["results"] == []

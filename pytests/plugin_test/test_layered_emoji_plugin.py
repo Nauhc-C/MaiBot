@@ -51,6 +51,15 @@ def _load_plugin_module():
             self.config = types.SimpleNamespace()
             self.ctx = None
 
+        async def on_load(self) -> None:
+            pass
+
+        async def on_unload(self) -> None:
+            pass
+
+        async def on_config_update(self, scope: str, config_data: dict[str, object], version: str) -> None:
+            pass
+
     def fake_decorator(*args, **kwargs):
         del args, kwargs
 
@@ -94,6 +103,14 @@ def _build_plugin(module):
     plugin.config = module.LayeredEmojiPluginConfig()
     plugin.ctx = types.SimpleNamespace(send=FakeSend(), call_capability=None)
     return plugin
+
+
+def test_plugin_overrides_required_lifecycle_methods() -> None:
+    module = _load_plugin_module()
+
+    assert module.LayeredEmojiPlugin.on_load is not module.MaiBotPlugin.on_load
+    assert module.LayeredEmojiPlugin.on_unload is not module.MaiBotPlugin.on_unload
+    assert module.LayeredEmojiPlugin.on_config_update is not module.MaiBotPlugin.on_config_update
 
 
 def test_load_layer_catalog_normalizes_layers_and_hashes(tmp_path: Path) -> None:

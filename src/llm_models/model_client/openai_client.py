@@ -254,6 +254,7 @@ def _build_image_content_part(part: ImageMessagePart) -> ChatCompletionContentPa
         "type": "image_url",
         "image_url": {
             "url": f"data:image/{image_format};base64,{image_base64}",
+            "detail": "high",
         },
     }
 
@@ -406,6 +407,7 @@ def _convert_user_message_content(message: Message) -> str | List[ChatCompletion
                 "type": "image_url",
                 "image_url": {
                     "url": f"data:image/{image_format};base64,{image_base64}",
+                    "detail": "high",
                 },
             }
         )

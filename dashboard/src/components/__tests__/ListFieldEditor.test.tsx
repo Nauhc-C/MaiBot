@@ -105,4 +105,23 @@ describe('ListFieldEditor', () => {
 
     expect(handleChange).toHaveBeenLastCalledWith([{ push_groups: ['group-b'] }])
   })
+
+  it('对象数组中的 context 子字段使用多行文本框', () => {
+    render(
+      <ListFieldEditor
+        value={[{ context: '一段很长的背景事实' }]}
+        onChange={vi.fn()}
+        itemType="object"
+        itemFields={{
+          context: {
+            type: 'string',
+            label: '注入的背景事实',
+            default: '',
+          },
+        }}
+      />
+    )
+
+    expect(screen.getByRole('textbox', { name: '注入的背景事实' }).tagName).toBe('TEXTAREA')
+  })
 })

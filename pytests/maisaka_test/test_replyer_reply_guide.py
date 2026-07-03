@@ -1,7 +1,9 @@
 from datetime import datetime
+from pathlib import Path
 
-from src.common.data_models.message_component_data_model import MessageSequence, TextComponent
+from src.chat.replyer.local_mai_replyer import LOCAL_MAI_REPLYER_SYSTEM_PROMPT
 from src.chat.replyer.maisaka_generator_base import BaseMaisakaReplyGenerator
+from src.common.data_models.message_component_data_model import MessageSequence, TextComponent
 from src.llm_models.payload_content.message import RoleType
 from src.maisaka.context.messages import AssistantMessage, SessionBackedMessage
 
@@ -17,6 +19,24 @@ def test_build_reply_requirements_includes_planner_reply_guide() -> None:
     assert "【Planner回复指引】" in requirement
     assert "先回答 A-SOUL 的基础信息" in requirement
     assert "【引用回复策略】" in requirement
+
+
+def test_replyer_prompts_preserve_key_facts_and_attitude() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+
+    zh_prompt = (project_root / "prompts" / "zh-CN" / "maisaka_replyer.prompt").read_text(encoding="utf-8")
+    en_prompt = (project_root / "prompts" / "en-US" / "maisaka_replyer.prompt").read_text(encoding="utf-8")
+    ja_prompt = (project_root / "prompts" / "ja-JP" / "maisaka_replyer.prompt").read_text(encoding="utf-8")
+
+    assert "关键事实" in zh_prompt
+    assert "实事求是" in zh_prompt
+    assert "当前态度" in zh_prompt
+    assert "Key facts" in en_prompt
+    assert "current attitude" in en_prompt
+    assert "重要な事実" in ja_prompt
+    assert "現在の態度" in ja_prompt
+    assert "关键事实" in LOCAL_MAI_REPLYER_SYSTEM_PROMPT
+    assert "空泛情绪" in LOCAL_MAI_REPLYER_SYSTEM_PROMPT
 
 
 def test_build_reply_requirements_sets_explicit_quote_policy() -> None:

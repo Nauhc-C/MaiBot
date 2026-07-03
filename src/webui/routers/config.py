@@ -187,7 +187,7 @@ class _SingleModelPromptOrchestrator(LLMOrchestrator):
             temperature=temperature,
             slow_threshold=30.0,
             selection_strategy="sequential",
-            hard_timeout=180.0,
+            hard_timeout=600.0,
         )
         super().__init__(task_name="webui_prompt_generator", request_type="webui_prompt_generator")
 

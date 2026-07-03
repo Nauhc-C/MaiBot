@@ -14,7 +14,39 @@ DEFAULT_PROVIDER_TEMPLATES: list[dict[str, Any]] = [
         "max_retry": 3,
         "timeout": 100,
         "retry_interval": 8,
-    }
+    },
+    {
+        "name": "jojo包月gpt",
+        "base_url": "https://max.jojocode.com/v1",
+        "api_key": "your-api-key",
+        "max_retry": 3,
+        "timeout": 60,
+        "retry_interval": 10,
+        "default_headers": {
+            "User-Agent": "curl/8.7.1",
+            "Accept": "*/*",
+        },
+    },
+    {
+        "name": "jojo 默认",
+        "base_url": "https://jojocode.com/v1",
+        "api_key": "your-api-key",
+        "max_retry": 3,
+        "timeout": 60,
+        "retry_interval": 10,
+        "default_headers": {
+            "User-Agent": "curl/8.7.1",
+            "Accept": "*/*",
+        },
+    },
+    {
+        "name": "ikun",
+        "base_url": "https://api.ikuncode.cc/v1",
+        "api_key": "your-api-key",
+        "max_retry": 2,
+        "timeout": 30,
+        "retry_interval": 10,
+    },
 ]
 
 DEFAULT_TASK_CONFIG_TEMPLATES: dict[str, dict[str, Any]] = {
@@ -27,7 +59,7 @@ DEFAULT_TASK_CONFIG_TEMPLATES: dict[str, dict[str, Any]] = {
         "hard_timeout": 120.0,
     },
     "memory": {
-        "model_list": [],
+        "model_list": ["gpt-5.4", "gpt-5.4-jojo", "gpt-5.4-ikun"],
         "max_tokens": 8192,
         "temperature": 0.5,
         "slow_threshold": 30.0,
@@ -100,6 +132,39 @@ DEFAULT_MODEL_TEMPLATES: list[dict[str, Any]] = [
         "price_out": 2.0,
         "visual": False,
         "extra_params": {"thinking": {"type": "disabled"}},
+    },
+    {
+        "model_identifier": "gpt-5.4",
+        "name": "gpt-5.4",
+        "api_provider": "jojo包月gpt",
+        "price_in": 0.0,
+        "price_out": 0.0,
+        "cache": False,
+        "cache_price_in": 0.0,
+        "visual": True,
+        "extra_params": {"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
+    },
+    {
+        "model_identifier": "gpt-5.4",
+        "name": "gpt-5.4-jojo",
+        "api_provider": "jojo 默认",
+        "price_in": 0.425,
+        "price_out": 2.55,
+        "cache": True,
+        "cache_price_in": 0.043,
+        "visual": True,
+        "extra_params": {"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
+    },
+    {
+        "model_identifier": "gpt-5.4",
+        "name": "gpt-5.4-ikun",
+        "api_provider": "ikun",
+        "price_in": 1.125,
+        "price_out": 6.75,
+        "cache": True,
+        "cache_price_in": 0.113,
+        "visual": True,
+        "extra_params": {"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
     },
 ]
 

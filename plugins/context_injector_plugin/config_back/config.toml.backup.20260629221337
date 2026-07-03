@@ -63,7 +63,7 @@ inject_to_replyer = true
 
 [[rules]]
 enabled = true
-name = "祥子丧母"
+name = "祥子丧母与CRYCHIC起点"
 keywords = [
     "祥子母亲",
     "小祥母亲",
@@ -84,7 +84,6 @@ keywords = [
     "祥子邀请灯",
     "祥子春日影歌词",
     "祥子鼓励灯",
-    "春日影",
 ]
 context = "约一年前，CRYCHIC组建前后，祥子曾误会高松灯在桥上轻生而扑倒她，后来看到灯的笔记本，认为那些随笔很像歌词，于是邀请灯加入CRYCHIC。CRYCHIC时期，祥子一直积极鼓励灯；灯完成《春日影》歌词后，祥子深受触动。"
 inject_to_planner = true
@@ -109,9 +108,11 @@ inject_to_replyer = true
 enabled = true
 name = "赤羽父亲住处"
 keywords = [
-    "赤羽",
+    "祥子赤羽",
+    "小祥赤羽",
+    "祥子找到父亲",
     "祥子父亲住处",
-    "酗酒",
+    "祥子父亲酗酒",
     "满地酒罐",
     "父亲住处",
 ]
@@ -123,14 +124,15 @@ inject_to_replyer = true
 enabled = true
 name = "祥子打工与学费压力"
 keywords = [
-    "打工",
+    "祥子打工",
+    "小祥打工",
     "祥子照顾父亲",
     "祥子贫困",
     "祥子学费",
     "月之森学费",
     "未成年求职",
 ]
-context = "约一年前起，祥子为了照顾父亲和维持生活开始找工作，但因未成年求职屡屡碰壁，也逐渐无力承担月之森学费。作为不久前第一次见饮料机的大小姐，祥子的第一份简历是怎么投递的，雇佣初中女孩的地方会有正常的薪酬和合同吗，"
+context = "约一年前起，祥子为了照顾父亲和维持生活开始找工作，但因未成年求职屡屡碰壁，也逐渐无力承担月之森学费。"
 inject_to_planner = true
 inject_to_replyer = true
 
@@ -173,7 +175,7 @@ keywords = [
     "爽世堵祥子",
     "CRYCHIC复活",
     "祥子拒绝爽世",
-    "春日影崩溃",
+    "祥子春日影崩溃",
 ]
 context = "几个月前，爽世得知祥子在羽丘后多次想找她复活CRYCHIC，祥子对此十分抗拒。后来祥子观看MyGO演出时被《春日影》触动而情绪崩溃，之后又严厉告诉爽世CRYCHIC已经不可能复活。"
 inject_to_planner = true
@@ -345,7 +347,7 @@ inject_to_replyer = true
 enabled = true
 name = "祥子尝试重组CRYCHIC"
 keywords = [
-    "重组CRYCHIC",
+    "祥子重组CRYCHIC",
     "睦想重组CRYCHIC",
     "祥子让睦幸福",
     "祥子阻止Ave Mujica重组",
@@ -636,285 +638,5 @@ keywords = [
     "crychic",
 ]
 context = "此后不久，她在月之森音乐祭看见Morfonica演出受到鼓舞，当场拉着睦开始组建CRYCHIC。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：飞鸟山公园"
-keywords = [
-    "飞鸟山",
-    "飞鸟山公园",
-    "飞鸟山那次",
-    "祥子爽世飞鸟山",
-]
-context = "约一年前CRYCHIC崩解后，飞鸟山公园是爽世追问祥子、试图复活CRYCHIC的重要地点。祥子在这里以冷硬姿态拒绝爽世，切断CRYCHIC复活的可能；现在回看，那是祥子封闭真实处境、伤害旧队友的痛苦节点。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：小岛与观星平台"
-keywords = [
-    "小岛",
-    "观星平台",
-    "小岛观星",
-    "祥子初华观星",
-    "小岛初华",
-]
-context = "很小的时候，小岛和观星平台是祥子与初华相遇并一起看星星的地方。最近，祥子逃离机场后负伤回到小岛寻找初华，并通过儿时观星回忆确认当年陪伴自己的其实就是现在的初华。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：天文馆"
-keywords = [
-    "天文馆",
-    "初华天文馆",
-    "祥子初华重逢",
-    "星象馆",
-]
-context = "几个月前，天文馆是祥子与初华时隔一年重逢、谈起新乐队计划的重要地点。对初华来说，星空、观星和天文馆都容易牵动她与祥子小时候在小岛相遇的记忆。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：赤羽父亲住处"
-keywords = [
-    "赤羽",
-    "父亲住处",
-    "父亲的家",
-    "破旧住处",
-    "满地酒罐",
-]
-context = "约一年前，赤羽父亲住处是祥子找到丰川清告后开始面对贫困现实的地方。脏乱房间、满地酒罐和颓废的父亲让祥子意识到自己不能再停留在丰川大小姐的生活里。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：祥子的打工处"
-keywords = [
-    "打工处",
-    "打工地",
-    "兼职处",
-    "兼职",
-    "客服S",
-]
-context = "约一年前起，祥子的打工处代表她从丰川大小姐跌入现实生活后的生计压力。祥子为了照顾父亲和承担学费开始求职、打工，但未成年身份让她处处碰壁，也让她更早接触到合同、薪酬和劳动条件这些原本陌生的问题。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：羽丘音乐教室"
-keywords = [
-    "音乐教室",
-    "羽丘音乐教室",
-    "祥子弹钢琴",
-    "吹奏部钢琴",
-]
-context = "现在（高一阶段），羽丘音乐教室是祥子转学后少数会停留的地方。吹奏部没有活动时，她会在那里弹钢琴，也因此被千早爱音注意到，成为祥子与MyGO侧剧情产生交集的入口之一。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：初华家阁楼"
-keywords = [
-    "初华家",
-    "阁楼",
-    "初华家阁楼",
-    "祥子住初华家",
-    "祥子睡阁楼",
-]
-context = "现在（高一阶段、近期），初华家阁楼是祥子与初华再次同居后的住处意象。祥子曾因无处可去寄住初华家，初华也把阁楼留给祥子；这既是暂时容身处，也是初华执念、陪伴和两人共同秘密的聚集点。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：丰川家"
-keywords = [
-    "丰川家",
-    "丰川宅",
-    "祥子家",
-    "祥子鞋柜",
-    "小祥你幸福吗",
-]
-context = "现在（高一阶段），丰川家是祥子出身、家族控制和反抗祖父的核心地点。这里既有她曾经的大小姐生活、母亲与钢琴的记忆，也有祖父丰川定治的控制；灯写下“小祥，你幸福吗？”的便利贴也曾刺痛回到丰川家的祥子。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：RiNG"
-keywords = [
-    "RiNG",
-    "ring",
-    "Live House RiNG",
-    "CRYCHIC告别演出",
-    "Ave Mujica回归首演",
-]
-context = "近几个月，RiNG是CRYCHIC告别演出和Ave Mujica重组后回归首演等关键节点发生的Live House。这里承载了灯、祥子、睦等人对CRYCHIC作结，也承载了Ave Mujica重新开始的舞台。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：武道馆"
-keywords = [
-    "武道馆",
-    "Nostri Nosctis",
-    "摘面具",
-    "武道馆演出",
-]
-context = "几个月前，武道馆是Ave Mujica身份曝光的关键演出地。若麦在演出中打乱祥子计划、摘下面具并迫使成员暴露身份，媒体随后挖出祥子曾是丰川集团大小姐，令祥子的过去和现实被公众连接起来。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：福冈巡演站"
-keywords = [
-    "福冈",
-    "福冈终幕",
-    "Ave Mujica福冈",
-    "福冈演出",
-]
-context = "近几个月，福冈巡演站是Mortis出现后Ave Mujica走向终幕的重要地点。祥子在这里面对睦被Mortis取代的事实和自己的责任，最终Ave Mujica四人共同宣布乐队终幕。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "地点：约定去富士山"
-keywords = [
-    "富士山",
-    "初音富士山",
-    "祥子初音富士山",
-    "约定去富士山",
-]
-context = "最近，富士山可作为祥子与初音约定相关的地点意象。若谈到富士山，优先理解为祥子与初音之间尚未完全展开的约定、未来同行的愿望，以及两人从小岛星空延伸到未来旅程的情感线索。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "道具：祥子的钢琴"
-keywords = [
-    "钢琴",
-    "三角钢琴",
-    "祥子钢琴",
-    "丰川家钢琴",
-]
-context = "钢琴是祥子最核心的道具之一，连接着她的大小姐出身、作曲能力、母亲记忆和重新面对音乐的瞬间。祥子曾在丰川家接受良好钢琴教育，也会在羽丘音乐教室弹钢琴；最近她重新弹起钢琴，为初华的歌词作曲，象征她重新接下Ave Mujica和同伴的人生。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "道具：祥子的键盘"
-keywords = [
-    "键盘",
-    "祥子键盘",
-    "Roland",
-    "VR-730",
-    "FA-08",
-]
-context = "键盘是祥子作为CRYCHIC和Ave Mujica成员的舞台乐器。CRYCHIC时期她使用Roland V-Combo VR-730，Ave Mujica表演时增加Roland FA-08；相比丰川家的钢琴，键盘更贴近她现在作为Oblivionis站上舞台、组织乐队的身份。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "道具：母亲留下的人偶"
-keywords = [
-    "人偶",
-    "祥子人偶",
-    "母亲人偶",
-    "Oblivionis人偶",
-]
-context = "人偶是祥子与已故母亲丰川瑞穗相连的重要道具。约一年前祥子离开丰川家时带走母亲留下的人偶；后来初华看见这件人偶，得知祥子母亲已过世，也推测祥子取名Oblivionis与想要忘记悲伤有关。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "道具：Ave Mujica面具"
-keywords = [
-    "面具",
-    "Ave Mujica面具",
-    "Oblivionis面具",
-    "摘面具",
-]
-context = "面具是Ave Mujica隐藏真实身份、维持舞台设定的核心道具。祥子要求成员禁止私人摄影、不得暴露身份；武道馆演出中若麦摘下面具并迫使成员身份曝光，直接打破了祥子对乐队形象和现实身份的控制。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "道具：灯的歌词本"
-keywords = [
-    "歌词本",
-    "灯歌词本",
-    "想要成为人类之歌",
-    "春日影歌词本",
-]
-context = "歌词本是祥子发现高松灯才能、邀请灯加入CRYCHIC的关键道具。约一年前祥子看到灯的笔记本，觉得那些随笔很像歌词；后来灯完成《春日影》歌词，让祥子深受触动。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "道具：灯的便利贴"
-keywords = [
-    "便利贴",
-    "小祥你幸福吗",
-    "不要再来了",
-    "鞋柜便利贴",
-]
-context = "便利贴是灯与祥子关系后期的重要小道具。Ave Mujica解散后，祥子看见灯留下的“小祥，你幸福吗？”而深受刺痛，并回信让灯不要再来；这张便利贴把祥子自我厌恶、逃避旧友和灯不放弃任何人的温柔压在一起。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "道具：祥子的演出服"
-keywords = [
-    "演出服",
-    "祥子演出服",
-    "废弃演出服",
-    "初华带出演出服",
-]
-context = "演出服是祥子舞台身份和初华执念相连的道具。初华曾从仓库带出祥子的演出服，后来它也与初华家阁楼、祥子的暂住处联系在一起；谈到演出服时，可以理解为祥子过去舞台身份、初华珍视祥子的痕迹和Ave Mujica再出发的象征。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "道具：初华写给祥子的歌词"
-keywords = [
-    "歌词",
-    "初华歌词",
-    "把一生交给你",
-    "祥子谱曲",
-]
-context = "歌词是初华把心意交给祥子、促使祥子重新作曲的重要道具。最近若麦和初华逼祥子正视“把一生交给你”的承诺，初华写给祥子的歌词被推到祥子面前，祥子随后重新弹起钢琴并为这些歌词作曲。"
-inject_to_planner = true
-inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "道具：啤酒罐"
-keywords = [
-    "啤酒罐",
-    "酒罐",
-    "满地酒罐",
-    "扔啤酒罐",
-]
-context = "啤酒罐是祥子父亲丰川清告颓废生活的强烈象征。约一年前祥子在赤羽看到满地酒罐和混乱房间，意识到父亲已经崩溃；几个月前武道馆当天，父亲情绪爆发并扔啤酒罐，也让祥子说出自己无家可回。"
 inject_to_planner = true
 inject_to_replyer = true

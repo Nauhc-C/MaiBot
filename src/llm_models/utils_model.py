@@ -975,7 +975,13 @@ class LLMOrchestrator:
         max_attempts = 1 if str(model_name or "").strip() else len(self.model_for_task.model_list)
         last_exception: Optional[Exception] = None
 
-        for _ in range(max_attempts):
+        if self.request_type.startswith("maisaka.") and not str(model_name or "").strip():
+            logger.debug(
+                f"LLMOrchestrator[{self.request_type}] 候选模型顺序="
+                f"{self.model_for_task.model_list} (selection_strategy={self.model_for_task.selection_strategy})"
+            )
+
+        for attempt_index in range(max_attempts):
             model_info, api_provider, client = self._select_model(
                 exclude_models=failed_models_this_request,
                 model_name=model_name,
@@ -1009,7 +1015,8 @@ class LLMOrchestrator:
                 if self.request_type.startswith("maisaka."):
                     logger.debug(
                         f"LLMOrchestrator[{self.request_type}] 正在向模型 model={model_info.name} 发送请求 "
-                        f"(tool_options={len(tool_options or [])})"
+                        f"(attempt={attempt_index + 1}/{max_attempts}, fallback_count={attempt_index}, "
+                        f"tool_options={len(tool_options or [])})"
                     )
                 response = await self._attempt_request_on_model_with_timeout(
                     api_provider,
@@ -1018,7 +1025,10 @@ class LLMOrchestrator:
                     model_info.name,
                 )
                 if self.request_type.startswith("maisaka."):
-                    logger.debug(f"LLMOrchestrator[{self.request_type}] 模型 model={model_info.name} 已返回 API 响应")
+                    logger.debug(
+                        f"LLMOrchestrator[{self.request_type}] 模型 model={model_info.name} 已返回 API 响应 "
+                        f"(attempt={attempt_index + 1}/{max_attempts}, fallback_count={attempt_index})"
+                    )
                 total_tokens, penalty, usage_penalty = self.model_usage[model_info.name]
                 if response_usage := response.usage:
                     total_tokens += response_usage.total_tokens
@@ -1040,6 +1050,13 @@ class LLMOrchestrator:
                 total_tokens, penalty, usage_penalty = self.model_usage[model_info.name]
                 self.model_usage[model_info.name] = (total_tokens, penalty + 1, usage_penalty - 1)
                 failed_models_this_request.add(model_info.name)
+                remaining_candidates = max_attempts - len(failed_models_this_request)
+                if self.request_type.startswith("maisaka."):
+                    logger.warning(
+                        f"LLMOrchestrator[{self.request_type}] 模型 model={model_info.name} 失败，"
+                        f"准备回退到下一个候选 (attempt={attempt_index + 1}/{max_attempts}, "
+                        f"failed_models={sorted(failed_models_this_request)}, remaining_candidates={remaining_candidates})"
+                    )
 
                 if isinstance(last_exception, RespNotOkException) and last_exception.status_code == 400:
                     logger.warning("收到客户端错误 (400)，跳过当前模型并继续尝试其他模型。")

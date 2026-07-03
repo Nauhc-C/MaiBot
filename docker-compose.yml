@@ -59,7 +59,7 @@ services:
       - TZ=Asia/Shanghai
     ports:
       - "6099:6099"
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:3251:3001"
     volumes:
       - ./docker-config/napcat:/app/napcat/config # 持久化napcat配置文件
       - ./data/qq:/app/.config/QQ # 持久化QQ本体

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -30,6 +33,14 @@ _PATH_RE = re.compile(
     re.IGNORECASE,
 )
 _SCRIPT_HINT_RE = re.compile(r"(?:^|[`\s])((?:scripts/|[\w./{}-]*scripts/)[\w./{}-]+)", re.IGNORECASE)
+_MAMA_REPLY_SKILL_NAME = "mama-reply"
+_MAMA_REPLY_SCRIPT_RELATIVE_PATH = Path("scripts") / "roll_1_100.py"
+_MAMA_REPLY_ROLL_TIMEOUT_SECONDS = 2
+_MAMA_REPLY_DIRECT_ADDRESS_RE = re.compile(
+    r"(?:小祥|祥子|sakiko)[\s,，。！？!?.~～、-]{0,3}(?:妈妈|妈咪)|"
+    r"(?:妈妈|妈咪)[\s,，。！？!?.~～、-]{0,3}(?:小祥|祥子|sakiko)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -259,6 +270,111 @@ class SkillBroker:
             "referenced_files": references,
             "unsupported_capabilities": unsupported_capabilities,
             "safety_notes": safety_notes,
+        }
+
+    def mama_reply_roll(self, user_message: str = "") -> dict[str, Any]:
+        """Run only the fixed mama-reply roll script for strict same-message triggers."""
+
+        self.refresh()
+        entry = self._resolve_skill(_MAMA_REPLY_SKILL_NAME)
+        if entry is None:
+            return {
+                "success": False,
+                "content": "mama-reply skill not found.",
+                "matched_skills": [],
+                "safety_notes": self._global_safety_notes(),
+            }
+
+        user_message = str(user_message or "")
+        if not _is_mama_reply_trigger(user_message):
+            return {
+                "success": False,
+                "content": (
+                    "mama-reply trigger rejected: the same user message must directly address the assistant "
+                    "with 小祥/祥子/sakiko plus 妈妈/妈咪."
+                ),
+                "matched_skills": [self._summary(entry)],
+                "safety_notes": [
+                    "No roll was performed because the strict same-message trigger was not satisfied."
+                ],
+            }
+
+        script_path = (entry.skill_dir / _MAMA_REPLY_SCRIPT_RELATIVE_PATH).resolve()
+        scripts_dir = (entry.skill_dir / "scripts").resolve()
+        try:
+            script_path.relative_to(scripts_dir)
+        except ValueError:
+            return {
+                "success": False,
+                "content": "Blocked mama-reply script outside its scripts directory.",
+                "matched_skills": [self._summary(entry)],
+                "safety_notes": self._global_safety_notes(),
+            }
+
+        if script_path.name != "roll_1_100.py" or not script_path.is_file():
+            return {
+                "success": False,
+                "content": "mama-reply roll script not found.",
+                "matched_skills": [self._summary(entry)],
+                "safety_notes": self._global_safety_notes(),
+            }
+
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        try:
+            completed = subprocess.run(
+                [sys.executable, str(script_path)],
+                cwd=str(entry.skill_dir),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                env=env,
+                timeout=_MAMA_REPLY_ROLL_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "content": "mama-reply roll script timed out.",
+                "matched_skills": [self._summary(entry)],
+                "safety_notes": self._global_safety_notes(),
+            }
+        except OSError as exc:
+            return {
+                "success": False,
+                "content": f"Failed to run mama-reply roll script: {exc}",
+                "matched_skills": [self._summary(entry)],
+                "safety_notes": self._global_safety_notes(),
+            }
+
+        prompt = completed.stdout.strip()
+        if completed.returncode != 0:
+            stderr = completed.stderr.strip()
+            content = "mama-reply roll script failed."
+            if stderr:
+                content = f"{content} {stderr[:500]}"
+            return {
+                "success": False,
+                "content": content,
+                "matched_skills": [self._summary(entry)],
+                "safety_notes": self._global_safety_notes(),
+            }
+        if not prompt:
+            return {
+                "success": False,
+                "content": "mama-reply roll script returned no prompt.",
+                "matched_skills": [self._summary(entry)],
+                "safety_notes": self._global_safety_notes(),
+            }
+
+        return {
+            "success": True,
+            "content": prompt,
+            "matched_skills": [self._summary(entry)],
+            "safety_notes": [
+                "Executed only mama-reply/scripts/roll_1_100.py after strict same-message trigger validation."
+            ],
         }
 
     def _build_signature(self) -> tuple[tuple[str, int], ...]:
@@ -571,6 +687,10 @@ def _normalize_reference_candidate(candidate: str, skill_dir_name: str) -> Path 
 
 def _tokenize(text: str) -> list[str]:
     return [match.group(0).lower() for match in _WORD_RE.finditer(str(text or ""))]
+
+
+def _is_mama_reply_trigger(user_message: str) -> bool:
+    return bool(_MAMA_REPLY_DIRECT_ADDRESS_RE.search(user_message))
 
 
 def _single_line(text: str) -> str:

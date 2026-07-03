@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
@@ -96,7 +97,35 @@ def test_build_frequency_instruction_prefers_desuwa_when_sparse() -> None:
 
     instruction = plugin._build_frequency_instruction(stats)
 
-    assert "优先在句尾带一个 desuwa" in instruction
+    assert "优先考虑补一个轻口癖" in instruction
+
+
+def test_build_choice_guidance_contains_catchphrase_policy() -> None:
+    module = _load_plugin_module()
+    plugin = _build_plugin(module)
+
+    instruction = plugin._build_choice_guidance()
+
+    assert "普通收尾优先用 desuwa" in instruction
+    assert "轻微追问或确认时用 desuno" in instruction
+    assert "轻微强调或带一点催促时才少量用 teyo" in instruction
+
+
+def test_build_prompt_nudge_returns_empty_when_last_message_used_catchphrase() -> None:
+    module = _load_plugin_module()
+    plugin = _build_plugin(module)
+    stats = module.CatchphraseStats(
+        recent_texts=["上一条已经用了desuwa"],
+        total_count=1,
+        catchphrase_count=1,
+        density=1.0,
+        last_message_used=True,
+        messages_since_last_use=0,
+    )
+
+    instruction = plugin._build_prompt_nudge(stats)
+
+    assert instruction == ""
 
 
 def test_maybe_patch_response_appends_desuwa_when_sparse() -> None:
@@ -114,6 +143,23 @@ def test_maybe_patch_response_appends_desuwa_when_sparse() -> None:
     patched = plugin._maybe_patch_response("我这次认真又看了一遍，别哭哭嘛", stats)
 
     assert patched.endswith("desuwa")
+
+
+def test_maybe_patch_response_uses_desuno_for_confirmation_when_sparse() -> None:
+    module = _load_plugin_module()
+    plugin = _build_plugin(module)
+    stats = module.CatchphraseStats(
+        recent_texts=["今天好热", "真的不想上班", "你先喝水"],
+        total_count=3,
+        catchphrase_count=0,
+        density=0.0,
+        last_message_used=False,
+        messages_since_last_use=4,
+    )
+
+    patched = plugin._maybe_patch_response("这样就可以了吗？", stats)
+
+    assert patched == "这样就可以了吗，desuno？"
 
 
 def test_maybe_patch_response_strips_trailing_catchphrase_when_last_message_used() -> None:
@@ -206,4 +252,71 @@ def test_before_request_merges_extra_prompt_with_frequency_instruction() -> None
     assert captured_kwargs["hours"] == plugin.config.density.lookback_hours
     merged_prompt = result["modified_kwargs"]["extra_prompt"]
     assert "先回答问题" in merged_prompt
-    assert "优先在句尾带一个 desuwa" in merged_prompt
+    assert "普通收尾优先用 desuwa" in merged_prompt
+    assert "优先考虑补一个轻口癖" in merged_prompt
+
+
+def test_before_request_is_silent_when_last_message_used_catchphrase() -> None:
+    module = _load_plugin_module()
+    plugin = _build_plugin(module)
+    now = datetime.now()
+
+    async def fake_call_capability(capability, **kwargs):
+        if capability == "message.get_recent":
+            return {
+                "success": True,
+                "messages": [
+                    {
+                        "message_id": "1",
+                        "platform": "qq",
+                        "message_info": {"user_info": {"user_id": "bot-1"}},
+                        "timestamp": (now - timedelta(minutes=2)).isoformat(sep=" "),
+                        "processed_plain_text": "我刚看完了desuwa",
+                    },
+                    {
+                        "message_id": "2",
+                        "platform": "qq",
+                        "message_info": {"user_info": {"user_id": "user-2"}},
+                        "timestamp": (now - timedelta(minutes=1)).isoformat(sep=" "),
+                        "processed_plain_text": "那然后呢",
+                    },
+                ],
+            }
+        raise AssertionError(capability)
+
+    async def fake_get_config(key, default=None):
+        config_values = {
+            "bot.qq_account": "bot-1",
+            "bot.platforms": [],
+        }
+        return config_values.get(key, default)
+
+    plugin.ctx.call_capability = fake_call_capability
+    plugin.ctx.config.get = fake_get_config
+
+    result = asyncio.run(
+        plugin.regulate_desuwa_before_request(
+            session_id="qq_private_DEVELOPER_ACCOUNT_ID",
+            request_type="maisaka.replyer",
+            task_name="replyer",
+            model_name="",
+            extra_prompt="先回答问题",
+            attempt=1,
+            retry_count=0,
+            max_retries=3,
+            reply_message_id="123",
+            reply_reason="",
+            selected_expression_ids=[],
+            reply_tool_args={},
+        )
+    )
+
+    assert result == {"action": "continue"}
+
+
+def test_manifest_declares_config_get_capability() -> None:
+    manifest_path = PLUGIN_PATH.with_name("_manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert "config.get" in manifest["capabilities"]
+    assert "message.get_recent" in manifest["capabilities"]

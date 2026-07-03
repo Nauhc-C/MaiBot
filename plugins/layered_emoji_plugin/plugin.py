@@ -244,6 +244,9 @@ class LayeredEmojiPlugin(MaiBotPlugin):
     async def on_load(self) -> None:
         self.reload_catalog()
 
+    async def on_unload(self) -> None:
+        self._recent_by_stream_emotion.clear()
+
     async def on_config_update(self, scope: str, config_data: dict[str, object], version: str) -> None:
         del scope, config_data, version
         self.reload_catalog()

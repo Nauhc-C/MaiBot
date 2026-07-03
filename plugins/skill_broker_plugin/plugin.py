@@ -160,6 +160,28 @@ class SkillBrokerPlugin(MaiBotPlugin):
             return self._disabled_result()
         return self._get_broker().load(name=name, include_references=include_references)
 
+    @Tool(
+        "mama_reply_roll",
+        description=(
+            "仅当同一条用户发言里把机器人直接称作“小祥妈妈/祥子妈咪/sakiko 妈妈”等时调用。"
+            "绝对不要用于用户叫其他人妈妈/妈咪的情况。该工具每次调用都会重新掷骰，只返回本轮应注入的内部回复提示；不要向用户复述工具调用过程。"
+        ),
+        parameters=[
+            _tool_param(
+                "user_message",
+                ToolParamType.STRING,
+                "本轮用户原始发言；必须是同一条发言，不要拼接历史上下文。",
+                True,
+            )
+        ],
+        visibility="visible",
+    )
+    async def handle_mama_reply_roll(self, user_message: str = "", **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        if not self._get_config_or_default().plugin.enabled:
+            return self._disabled_result()
+        return self._get_broker().mama_reply_roll(user_message=user_message)
+
 
 def create_plugin() -> SkillBrokerPlugin:
     """Create the plugin instance."""

@@ -70,6 +70,8 @@ EXTERNAL_MESSAGE_BURST_INTERVAL_SECONDS = 5.0
 # 空窗补偿所用平均消息间隔的下限：即便统计值偏小也不会低于该值，
 # 限制「沉默时间」被折算成消息的速度，避免低活跃群聊里反复触发回复。
 IDLE_COMPENSATION_MIN_AVERAGE_INTERVAL_SECONDS = 30.0
+# 临时关闭「新消息到来时中断当前 Planner 并重试」行为，避免聊天流被频繁重规划打断。
+PLANNER_INTERRUPT_TEMP_DISABLED = True
 
 
 class MaisakaHeartFlowChatting(MaisakaFocusRuntimeMixin, MaisakaRuntimeDisplayMixin):
@@ -171,6 +173,8 @@ class MaisakaHeartFlowChatting(MaisakaFocusRuntimeMixin, MaisakaRuntimeDisplayMi
     def _planner_interrupt_max_consecutive_count(self) -> int:
         """返回当前实时生效的 Planner 连续打断上限。"""
 
+        if PLANNER_INTERRUPT_TEMP_DISABLED:
+            return 0
         return max(0, int(global_config.chat.planner_interrupt_max_consecutive_count))
 
     @property

@@ -78,6 +78,7 @@ TIMING_GATE_MAX_ATTEMPTS = 3
 TIMING_GATE_TOOL_NAMES = {"continue", "no_action", "wait"}
 PLANNER_NO_TOOL_FINISH_THRESHOLD = 3
 PLANNER_NO_TOOL_HINT_DISPLAY_PREFIX = "[Planner 工具选择提示]"
+PLANNER_NO_TOOL_UNSENT_CONTENT_MAX_CHARS = 220
 HISTORY_SILENT_TOOL_NAMES = {"finish"}
 HISTORY_DEFERRED_TOOL_RESULT_NAMES = {"wait"}
 TOOL_RESULT_MEDIA_SOURCE_KIND = "tool_result_media"
@@ -604,6 +605,17 @@ class MaisakaReasoningEngine:
                 if str(tool_call.func_name).strip()
             ]
             if not returned_tool_names:
+                response_content = str(getattr(response, "content", "") or "").strip()
+                if response_content:
+                    logger.warning(
+                        f"{self._runtime.log_prefix} Timing Gate 未返回控制工具调用但返回了判断内容，"
+                        "将按 continue 处理"
+                    )
+                    tool_result_summaries.append(
+                        "- continue [缺少 Timing 工具]: 未返回控制工具调用但返回了判断内容，已继续进入 Planner"
+                    )
+                    return "continue", response, tool_result_summaries, tool_monitor_results
+
                 logger.warning(
                     f"{self._runtime.log_prefix} Timing Gate 未返回任何控制工具调用，将按 no_action 处理"
                 )
@@ -724,18 +736,42 @@ class MaisakaReasoningEngine:
         )
 
     @staticmethod
-    def _build_planner_no_tool_hint(attempt_count: int) -> str:
+    def _build_planner_no_tool_unsent_excerpt(reasoning_content: str) -> str:
+        """提取未发送思考内容的短摘要，避免模型误以为已经发出。"""
+
+        normalized_text = " ".join(str(reasoning_content or "").split()).strip()
+        if not normalized_text:
+            return ""
+
+        if len(normalized_text) <= PLANNER_NO_TOOL_UNSENT_CONTENT_MAX_CHARS:
+            return normalized_text
+        return f"{normalized_text[:PLANNER_NO_TOOL_UNSENT_CONTENT_MAX_CHARS].rstrip()}..."
+
+    @classmethod
+    def _build_planner_no_tool_hint(cls, attempt_count: int, reasoning_content: str = "") -> str:
         """构造 Planner 未选择工具时注入的重试提示。"""
+
+        unsent_excerpt = cls._build_planner_no_tool_unsent_excerpt(reasoning_content)
+        unsent_notice = ""
+        if unsent_excerpt:
+            unsent_notice = (
+                "\n注意：你上一轮输出的文本并没有发给用户，因为你没有调用任何工具。"
+                "除非你在本轮调用 reply，否则用户看不到那段内容。\n"
+                f"上一轮未发送文本摘要：{unsent_excerpt}\n"
+            )
 
         if attempt_count <= 1:
             return (
-                "你刚刚只输出了分析，但没有选择任何工具。Planner 每轮思考后必须调用至少一个当前可用工具："
+                "你刚刚只输出了分析，但没有选择任何工具。"
+                f"{unsent_notice}"
+                "Planner 每轮思考后必须调用至少一个当前可用工具："
                 "需要回复时调用 reply，需要先等待新消息时调用 no_action，需要结束本轮时调用 finish，"
                 "需要信息时调用查询或查看类工具。请重新思考，并在本轮选择一个工具。"
             )
 
         return (
             "严厉提醒：这是你连续第二次没有调用工具。不要只输出分析文本；"
+            f"{unsent_notice}"
             "你必须立刻调用一个当前可用工具。没有要回复或查询的内容，也必须调用 no_action 或 finish。"
         )
 
@@ -757,12 +793,12 @@ class MaisakaReasoningEngine:
             if not self._is_planner_no_tool_hint_message(message)
         ]
 
-    def _insert_planner_no_tool_hint(self, attempt_count: int) -> None:
+    def _insert_planner_no_tool_hint(self, attempt_count: int, reasoning_content: str = "") -> None:
         """在最新真实用户消息之后插入 Planner 工具选择提示。"""
 
         self._clear_planner_no_tool_hints()
         hint_message = ReferenceMessage(
-            content=self._build_planner_no_tool_hint(attempt_count),
+            content=self._build_planner_no_tool_hint(attempt_count, reasoning_content),
             timestamp=datetime.now(),
             reference_type=ReferenceMessageType.PLANNER_TOOL_HINT,
             remaining_uses_value=None,
@@ -782,6 +818,7 @@ class MaisakaReasoningEngine:
         self,
         planner_no_tool_count: int,
         planner_extra_lines: list[str],
+        reasoning_content: str,
     ) -> tuple[int, str, str, bool]:
         """处理 Planner 未调用工具时的递进提示与终止策略。"""
 
@@ -799,7 +836,7 @@ class MaisakaReasoningEngine:
             )
             return planner_no_tool_count, "finish", cycle_end_detail, True
 
-        self._insert_planner_no_tool_hint(planner_no_tool_count)
+        self._insert_planner_no_tool_hint(planner_no_tool_count, reasoning_content)
         cycle_end_detail = (
             f"Planner 第 {planner_no_tool_count} 次没有调用工具，"
             "已插入工具选择提示并重试。"
@@ -1154,6 +1191,7 @@ class MaisakaReasoningEngine:
                             ) = self._handle_planner_no_tool_retry(
                                 planner_no_tool_count,
                                 planner_extra_lines,
+                                reasoning_content,
                             )
                             if should_finish_after_no_tool:
                                 break

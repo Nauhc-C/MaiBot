@@ -7,6 +7,12 @@ export function getNestedRecord(config: Record<string, unknown>, path?: string):
   if (!path) {
     return undefined
   }
+  const existingGeneral = config.general
+  const hasRealGeneralSection =
+    existingGeneral && typeof existingGeneral === 'object' && !Array.isArray(existingGeneral)
+  if (path === 'general' && !hasRealGeneralSection) {
+    return config
+  }
   const parts = path.split('.').filter(Boolean)
   let current: unknown = config
 
@@ -30,6 +36,16 @@ export function setNestedField(
   fieldName: string,
   value: unknown,
 ): Record<string, unknown> {
+  const existingGeneral = config.general
+  const hasRealGeneralSection =
+    existingGeneral && typeof existingGeneral === 'object' && !Array.isArray(existingGeneral)
+  if (path === 'general' && !hasRealGeneralSection) {
+    return {
+      ...config,
+      [fieldName]: value,
+    }
+  }
+
   const parts = path.split('.').filter(Boolean)
   const nextConfig: Record<string, unknown> = { ...config }
   let currentTarget = nextConfig

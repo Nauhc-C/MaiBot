@@ -4,9 +4,12 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Tuple
 
+import base64
+from PIL import Image as PILImage
 from src.chat.message_receive.chat_manager import BotChatSession
 from src.chat.message_receive.message import SessionMessage
 from src.chat.utils.utils import get_chat_type_and_target_info
@@ -59,6 +62,10 @@ logger = get_logger("replyer")
 
 DEBUG_REPLY_CACHE_DIR = Path("logs/debug_reply_cache")
 REPLYER_MAX_HOOK_RETRIES = 3
+ROLE_IDENTIFICATION_QUERY_PATTERN = re.compile(
+    r"(哪个角色|什么角色|是谁|哪位|出处|来源|哪部(?:作品|动漫|游戏)|哪个作品|叫什么|认认|认出来)",
+    re.IGNORECASE,
+)
 _CATCHPHRASE_BLOCKLIST_MARKERS = (
     "disable_catchphrases",
     "no_catchphrases",
@@ -246,6 +253,121 @@ class BaseMaisakaReplyGenerator:
         if normalized_content:
             return normalized_content
         return (reply_message.processed_plain_text or "").strip()
+
+    @staticmethod
+    def _guess_image_format(image_bytes: bytes) -> str:
+        if not image_bytes:
+            return ""
+        try:
+            with PILImage.open(BytesIO(image_bytes)) as image:
+                image_format = (image.format or "").lower()
+                if image_format in {"jpg", "jpeg"}:
+                    return "jpeg"
+                return image_format
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _is_visual_component(component: Any) -> bool:
+        return isinstance(component, (ImageComponent, EmojiComponent))
+
+    def _looks_like_role_identification_query(self, reply_message: Optional[SessionMessage]) -> bool:
+        if reply_message is None:
+            return False
+        target_content = self._build_target_message_content(reply_message).strip()
+        if not target_content:
+            return False
+        return bool(ROLE_IDENTIFICATION_QUERY_PATTERN.search(target_content))
+
+    async def _load_visual_component_bytes(self, component: Any) -> tuple[bytes, str]:
+        if isinstance(component, ImageComponent):
+            if not component.binary_data:
+                await component.load_image_binary()
+            image_bytes = component.binary_data
+        elif isinstance(component, EmojiComponent):
+            if not component.binary_data:
+                await component.load_emoji_binary()
+            image_bytes = component.binary_data
+        else:
+            return b"", ""
+
+        return image_bytes, self._guess_image_format(image_bytes)
+
+    async def _find_latest_visual_context(
+        self,
+        chat_history: List[LLMContextMessage],
+        reply_message: Optional[SessionMessage],
+    ) -> tuple[Optional[SessionMessage], Optional[Any], bytes, str]:
+        candidates: List[SessionMessage] = []
+        if reply_message is not None:
+            candidates.append(reply_message)
+
+        for message in reversed(chat_history):
+            if not isinstance(message, SessionBackedMessage):
+                continue
+            original_message = message.original_message
+            if original_message is None:
+                continue
+            candidates.append(original_message)
+
+        for candidate in candidates:
+            for component in candidate.raw_message.components:
+                if not self._is_visual_component(component):
+                    continue
+                try:
+                    image_bytes, image_format = await self._load_visual_component_bytes(component)
+                except Exception:
+                    continue
+                if image_bytes and image_format:
+                    return candidate, component, image_bytes, image_format
+        return None, None, b"", ""
+
+    async def _build_visual_identification_supplement(
+        self,
+        *,
+        chat_history: List[LLMContextMessage],
+        reply_message: Optional[SessionMessage],
+    ) -> str:
+        if not self._looks_like_role_identification_query(reply_message):
+            return ""
+
+        source_message, source_component, image_bytes, image_format = await self._find_latest_visual_context(
+            chat_history,
+            reply_message,
+        )
+        if source_message is None or source_component is None or not image_bytes or not image_format:
+            return ""
+
+        source_kind = "表情包" if isinstance(source_component, EmojiComponent) else "图片"
+        source_text = self._normalize_content(self._build_target_message_content(source_message), limit=180)
+        prompt_lines = [
+            f"用户正在追问上一条{source_kind}里的角色、出处或身份。",
+            "请直接根据图片判断最可能的角色名或作品出处。",
+            "如果不能完全确认，也请给出 1 到 3 个最可能候选，并简述你是依据哪些外观细节判断的。",
+            "不要只回答“无法确认”或“看不出来”，尽量给出可用猜测。",
+        ]
+        if source_text:
+            prompt_lines.append(f"上下文文字：{source_text}")
+
+        prompt = "\n".join(prompt_lines)
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+        try:
+            from src.chat.image_system.image_manager import vlm as image_vlm
+
+            generation_result = await image_vlm.generate_response_for_image(
+                prompt,
+                image_base64,
+                image_format,
+            )
+        except Exception as exc:
+            logger.warning(f"构建视觉识别补充失败: {exc}")
+            return ""
+
+        supplement = str(generation_result.response or "").strip()
+        if not supplement:
+            return ""
+        return f"【原图识别补充】\n{supplement}"
 
     @staticmethod
     def _get_chat_prompt_for_chat(chat_id: str, is_group_chat: Optional[bool]) -> str:
@@ -1047,6 +1169,14 @@ class BaseMaisakaReplyGenerator:
         result.selected_expression_details = (
             list(selected_expressions) if selected_expressions is not None else list(reply_context.selected_expressions)
         )
+        try:
+            visual_identification_supplement = await self._build_visual_identification_supplement(
+                chat_history=filtered_history,
+                reply_message=reply_message,
+            )
+        except Exception as exc:
+            logger.warning(f"构建视觉识别补充上下文失败: {exc}")
+            visual_identification_supplement = ""
 
         # logger.info(
         #     f"回复上下文完成 流={stream_id} 已选表达={result.selected_expression_ids!r}"
@@ -1096,6 +1226,10 @@ class BaseMaisakaReplyGenerator:
                 retry_constraints,
                 active_reply_tool_args,
             )
+            if visual_identification_supplement:
+                active_reply_requirements = "\n\n".join(
+                    block for block in (active_reply_requirements, visual_identification_supplement) if block.strip()
+                )
 
             prompt_started_at = time.perf_counter()
             try:

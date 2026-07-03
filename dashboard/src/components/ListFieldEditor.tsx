@@ -35,6 +35,7 @@ import { Card } from '@/components/ui/card'
 import { MultiSelect } from '@/components/ui/multi-select'
 import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -363,6 +364,25 @@ function ObjectItemEditor({
             maxItems={fieldDef.max_items}
             disabled={disabled}
             placeholder={fieldDef.placeholder}
+          />
+        </div>
+      )
+    }
+
+    // string (default)
+    if (fieldName === 'context') {
+      return (
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">
+            {fieldDef.label ?? fieldName}
+          </Label>
+          <Textarea
+            value={(fieldValue as string) ?? fieldDef.default ?? ''}
+            onChange={(e) => handleFieldChange(fieldName, e.target.value)}
+            placeholder={fieldDef.placeholder}
+            disabled={disabled}
+            rows={3}
+            className="min-h-20 resize-y text-sm"
           />
         </div>
       )

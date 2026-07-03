@@ -7,18 +7,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 import logging
 import re
 from typing import Any, List, Sequence
 
-from maibot_sdk import Field, HookHandler, MaiBotPlugin, PluginConfigBase
-from maibot_sdk.types import ErrorPolicy, HookMode, HookOrder
+from maibot_sdk import Field, HookHandler, MaiBotPlugin, PluginConfigBase, Tool
+from maibot_sdk.types import ErrorPolicy, HookMode, HookOrder, ToolParameterInfo, ToolParamType
 
 logger = logging.getLogger("context_injector_plugin")
 
 _PLUGIN_ID = "maibot-team.context-injector"
 _INJECTION_HEADER = "【当前对话背景】"
 _MAX_RECENT_USER_MESSAGE_LIMIT = 64
+_MAX_SEARCH_CONTEXT_LIMIT = 20
+
+
+def _tool_param(name: str, param_type: ToolParamType, description: str, required: bool) -> ToolParameterInfo:
+    return ToolParameterInfo(name=name, param_type=param_type, description=description, required=required)
 
 
 class PluginSectionConfig(PluginConfigBase):
@@ -85,6 +91,7 @@ class ContextInjectorPlugin(MaiBotPlugin):
         super().__init__()
         self._active_rule_keys_by_session: dict[str, set[str]] = {}
         self._injected_stage_by_session_rule: dict[tuple[str, str], str] = {}
+        self._delivered_rule_keys_by_session: dict[str, set[str]] = {}
 
     async def on_load(self) -> None:
         logger.info("[%s] 插件已加载", _PLUGIN_ID)
@@ -96,6 +103,7 @@ class ContextInjectorPlugin(MaiBotPlugin):
         del config_data
         self._active_rule_keys_by_session.clear()
         self._injected_stage_by_session_rule.clear()
+        self._delivered_rule_keys_by_session.clear()
         logger.info("[%s] 配置已更新，已清空话题去重状态: scope=%s version=%s", _PLUGIN_ID, scope, version)
 
     @staticmethod
@@ -183,6 +191,10 @@ class ContextInjectorPlugin(MaiBotPlugin):
             candidates = []
         return [keyword.strip() for keyword in candidates if keyword.strip()]
 
+    @staticmethod
+    def _normalize_search_text(text: Any) -> str:
+        return re.sub(r"\s+", "", str(text or "")).lower()
+
     def _iter_enabled_rules(self) -> list[tuple[str, ContextInjectionRule]]:
         raw_rules = getattr(self.config, "rules", [])
         if not isinstance(raw_rules, list):
@@ -204,6 +216,92 @@ class ContextInjectorPlugin(MaiBotPlugin):
             seen_keys.add(rule_name)
             enabled_rules.append((rule_name, rule))
         return enabled_rules
+
+    @staticmethod
+    def _rule_payload(rule_key: str, rule: ContextInjectionRule, *, score: float | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "name": str(getattr(rule, "name", "") or rule_key).strip() or rule_key,
+            "keywords": ContextInjectorPlugin._normalize_keywords(getattr(rule, "keywords", [])),
+            "context": str(getattr(rule, "context", "") or "").strip(),
+        }
+        if score is not None:
+            payload["score"] = round(float(score), 4)
+        return payload
+
+    def _mark_rules_delivered(self, session_id: str, rule_keys: Sequence[str]) -> None:
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            return
+        delivered_keys = self._delivered_rule_keys_by_session.setdefault(normalized_session_id, set())
+        delivered_keys.update(str(rule_key) for rule_key in rule_keys if str(rule_key or "").strip())
+
+    def _is_rule_delivered(self, session_id: str, rule_key: str) -> bool:
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            return False
+        return str(rule_key or "").strip() in self._delivered_rule_keys_by_session.get(normalized_session_id, set())
+
+    def _score_rule_for_query(self, query: str, rule_key: str, rule: ContextInjectionRule) -> float:
+        normalized_query = self._normalize_search_text(query)
+        if not normalized_query:
+            return 0.0
+
+        name = str(getattr(rule, "name", "") or rule_key).strip()
+        keywords = self._normalize_keywords(getattr(rule, "keywords", []))
+        context = str(getattr(rule, "context", "") or "").strip()
+
+        normalized_name = self._normalize_search_text(name)
+        normalized_context = self._normalize_search_text(context)
+        normalized_keywords = [self._normalize_search_text(keyword) for keyword in keywords]
+
+        score = 0.0
+        if normalized_query == normalized_name:
+            score = max(score, 120.0)
+        if normalized_query and normalized_query in normalized_name:
+            score = max(score, 100.0 + min(len(normalized_query), 20))
+        for keyword, normalized_keyword in zip(keywords, normalized_keywords, strict=False):
+            if not normalized_keyword:
+                continue
+            if normalized_query == normalized_keyword:
+                score = max(score, 115.0)
+            elif normalized_query in normalized_keyword or normalized_keyword in normalized_query:
+                score = max(score, 90.0 + min(len(normalized_keyword), len(normalized_query), 20))
+            elif normalized_query in self._normalize_search_text(keyword):
+                score = max(score, 70.0)
+        if normalized_query in normalized_context:
+            score = max(score, 65.0 + min(len(normalized_query), 20))
+
+        haystacks = [normalized_name, normalized_context, *normalized_keywords]
+        fuzzy_score = max(
+            (SequenceMatcher(None, normalized_query, haystack[: max(len(normalized_query) * 3, 24)]).ratio() for haystack in haystacks if haystack),
+            default=0.0,
+        )
+        return max(score, fuzzy_score * 60.0)
+
+    def _search_context_rules(
+        self,
+        *,
+        query: str,
+        limit: int,
+        session_id: str = "",
+        include_injected: bool = False,
+    ) -> list[tuple[str, ContextInjectionRule, float]]:
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            return []
+
+        safe_limit = max(1, min(int(limit or 5), _MAX_SEARCH_CONTEXT_LIMIT))
+        scored_rules: list[tuple[str, ContextInjectionRule, float]] = []
+        for rule_key, rule in self._iter_enabled_rules():
+            if not include_injected and self._is_rule_delivered(session_id, rule_key):
+                continue
+            score = self._score_rule_for_query(normalized_query, rule_key, rule)
+            if score <= 0:
+                continue
+            scored_rules.append((rule_key, rule, score))
+
+        scored_rules.sort(key=lambda item: (-item[2], item[0]))
+        return scored_rules[:safe_limit]
 
     def _match_rules(self, recent_user_texts: Sequence[str]) -> list[RuleHit]:
         if not recent_user_texts:
@@ -246,6 +344,7 @@ class ContextInjectorPlugin(MaiBotPlugin):
             self._injected_stage_by_session_rule[injected_state_key] = stage
             selected_hits.append(hit)
 
+        self._mark_rules_delivered(session_id, [hit.key for hit in selected_hits])
         return selected_hits
 
     @staticmethod
@@ -354,6 +453,77 @@ class ContextInjectorPlugin(MaiBotPlugin):
         except Exception:  # noqa: BLE001
             logger.exception("[%s] replyer 上下文注入失败: session=%s", _PLUGIN_ID, session_id)
             return {"action": "continue"}
+
+    @Tool(
+        "search_context_rules",
+        description=(
+            "按自然语言模糊搜索关键词上下文注入规则。"
+            "用于主动查找角色关系、背景事实、时间线和固定设定；默认不会返回本会话已注入或已返回过的规则。"
+        ),
+        parameters=[
+            _tool_param("query", ToolParamType.STRING, "搜索词，例如 祥子父亲、初华身世、睦和祥子关系", True),
+            _tool_param("limit", ToolParamType.INTEGER, "最多返回多少条；默认 5，最大 20", False),
+            _tool_param("include_injected", ToolParamType.BOOLEAN, "是否允许返回本会话已注入或已返回过的规则；默认 false", False),
+        ],
+        visibility="visible",
+    )
+    async def handle_search_context_rules(
+        self,
+        query: str = "",
+        limit: int | None = None,
+        include_injected: bool = False,
+        stream_id: str = "",
+        chat_id: str = "",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        session_id = str(stream_id or chat_id or kwargs.get("session_id") or "").strip()
+        if not self._is_plugin_enabled():
+            return {
+                "success": False,
+                "content": "关键词上下文注入器未启用。",
+                "results": [],
+            }
+
+        safe_limit = max(1, min(int(limit or 5), _MAX_SEARCH_CONTEXT_LIMIT))
+        matches = self._search_context_rules(
+            query=query,
+            limit=safe_limit,
+            session_id=session_id,
+            include_injected=bool(include_injected),
+        )
+        result_rule_keys = [rule_key for rule_key, _, _ in matches]
+        if not include_injected:
+            self._mark_rules_delivered(session_id, result_rule_keys)
+
+        results = [
+            self._rule_payload(rule_key, rule, score=score)
+            for rule_key, rule, score in matches
+        ]
+        content = "未找到可用的上下文规则。" if not results else self._build_search_tool_content(results)
+        logger.info(
+            "[%s] 主动搜索上下文规则: session=%s query=%s results=%s include_injected=%s",
+            _PLUGIN_ID,
+            session_id or "<none>",
+            self._preview(query, 40),
+            ",".join(result["name"] for result in results),
+            bool(include_injected),
+        )
+        return {
+            "success": True,
+            "content": content,
+            "results": results,
+            "filtered_already_delivered": not bool(include_injected),
+        }
+
+    @staticmethod
+    def _build_search_tool_content(results: Sequence[dict[str, Any]]) -> str:
+        lines = ["【可用上下文规则】"]
+        for result in results:
+            name = str(result.get("name") or "").strip()
+            context = str(result.get("context") or "").strip()
+            if name and context:
+                lines.append(f"- {name}：{context}")
+        return "\n".join(lines).strip()
 
 
 def create_plugin() -> ContextInjectorPlugin:
