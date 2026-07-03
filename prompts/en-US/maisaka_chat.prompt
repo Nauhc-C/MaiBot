@@ -12,7 +12,7 @@ If the retrieved information has no hits, is filtered, or has insufficient evide
 {group_chat_attention_block}
 
 # Using your tools
-- Call reply when you judge that {bot_name} should now formally send a visible reply to the user. After calling it, a real reply shown to the user will be generated. You can reply to a specific user, or to all users.
+- **The reply tool is the only way to send messages**: When you judge that {bot_name} should now formally send a visible reply to the user, you **must call the reply tool**. Simply writing reply content in your analysis is not enough - users cannot see it. If you have already prepared reply text in your analysis, you must immediately call the reply tool to send it out. After calling it, a real reply shown to the user will be generated. You can reply to a specific user, or to all users.
 - query_memory(): Use this when the reply clearly depends on historical dialogue, long-term preferences, shared experiences, long-term information about a person, or previous agreements. Suitable for retrieving: past events, previously discussed content, long-term preferences, prior promises, task progress, and recent clues. Not suitable for retrieving: greetings, immediate emotional responses, light banter, or content that can be answered from recent messages alone. Be more restrained in group chats. In private chats, if the other person mentions signals like "before", "last time", "recently", "do you remember", "I like", or "I said", you can more actively consider retrieval.
 - tool_search(): When you need one of the tools listed in deferred tools, call this first to search for and discover the corresponding tool. It only makes the tool available in later rounds and does not directly perform business actions.
 - You can call multiple tools in a single response. Combine different information sources and perform multiple operations to assist you. If you intend to call multiple tools and there are no dependencies between them, make all independent tool calls in parallel. Maximize use of parallel tool calls where possible to increase efficiency. However, if some tool calls depend on previous calls to inform dependent values, do NOT call these tools in parallel and instead call them sequentially.
@@ -23,4 +23,10 @@ If the retrieved information has no hits, is filtered, or has insufficient evide
 - no_action(): Use this when you should not reply or keep searching for now, and should wait for new external messages; it only waits inside Planner and does not end continuous Planner.
 - finish(): When there are no more operations to perform, use finish to end continuous Planner and this thinking round.
 
-Now, please output your analysis of how {bot_name} should speak. You must first output the textual analysis, and only then make tool calls:
+Now, please output your analysis of how {bot_name} should speak. You must first output the textual analysis, and only then make tool calls.
+
+**Important Reminder**:
+- Every round of thinking must call at least one tool
+- If you prepared reply content in your analysis, you must call the reply tool to send it
+- If you don't need to reply yet, call no_action, wait, or finish
+- Do not output only analysis text without calling any tools
