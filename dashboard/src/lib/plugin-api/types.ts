@@ -45,13 +45,16 @@ export interface InstalledPlugin {
     keywords?: string[]
     plugin_type?: PluginType | string
     display?: PluginDisplay
+    changelog?: string
     [key: string]: unknown  // 允许其他字段
   }
   path: string
+  changelog?: string | null
   enabled?: boolean
   disabled?: boolean
   loaded?: boolean
   load_status?: 'success' | 'failed' | 'inactive' | 'disabled' | 'unknown' | 'loading'
+  load_error?: string
   circuit_status?: {
     state: 'open' | 'half_open'
     remaining_sec: number
@@ -196,4 +199,32 @@ export interface PluginConfigSchema {
   sections: Record<string, ConfigSectionSchema>
   layout: ConfigLayoutSchema
   _note?: string
+}
+
+/**
+ * 插件配置页初始化数据
+ */
+export interface PluginConfigBundle {
+  schema: PluginConfigSchema
+  config: Record<string, unknown>
+  rawConfig: string
+  message?: string
+}
+
+export type PluginRuntimeComponentType = 'action' | 'command' | 'tool'
+
+export interface PluginRuntimeComponent {
+  name: string
+  description: string
+  enabled: boolean
+  plugin_name: string
+  component_type: PluginRuntimeComponentType
+  action_parameters?: Record<string, string>
+  action_require?: string[]
+  associated_types?: string[]
+  activation_type?: string
+  random_activation_probability?: number
+  activation_keywords?: string[]
+  parallel_action?: boolean
+  parameters_schema?: Record<string, unknown>
 }

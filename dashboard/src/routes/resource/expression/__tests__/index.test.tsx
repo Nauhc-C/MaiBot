@@ -20,6 +20,8 @@ vi.mock('@/lib/expression-api', () => ({
   getChatList: vi.fn(),
   getExpressionList: vi.fn(),
   getExpressionStats: vi.fn(),
+  getExpressionClusters: vi.fn(),
+  getExpressionClusterMembers: vi.fn(),
   getReviewStats: vi.fn(),
   getExpressionGroups: vi.fn(),
   getExpressionDetail: vi.fn(),
@@ -117,6 +119,22 @@ beforeEach(() => {
   vi.mocked(expressionApi.getExpressionStats).mockResolvedValue({
     total: 2, recent_7days: 1, chat_count: 1, top_chats: {},
   } as never)
+  vi.mocked(expressionApi.getExpressionClusters).mockResolvedValue({
+    success: true,
+    index_exists: true,
+    index_path: 'data/expression_selection/expression_vector_index.json',
+    generated_at: null,
+    updated_at: null,
+    embedding_model: 'test',
+    embedding_dimension: 3,
+    sample_count: 1,
+    clusters: [],
+  } as never)
+  vi.mocked(expressionApi.getExpressionClusterMembers).mockResolvedValue({
+    success: true,
+    cluster: null,
+    data: [],
+  } as never)
   vi.mocked(expressionApi.getReviewStats).mockResolvedValue({
     total: 2, unchecked: 1, passed: 1, ai_checked: 0, user_checked: 1,
   } as never)
@@ -135,7 +153,7 @@ async function renderPage() {
 }
 
 describe('ExpressionManagementPage 特征化', () => {
-  it('初始加载拉取列表/统计/审核统计/聊天流/互通组', async () => {
+  it('初始加载拉取列表/统计/审核统计/聊天流/共享组', async () => {
     await renderPage()
     await waitFor(() => expect(expressionApi.getExpressionList).toHaveBeenCalled())
     expect(expressionApi.getExpressionStats).toHaveBeenCalled()
@@ -145,10 +163,10 @@ describe('ExpressionManagementPage 特征化', () => {
     expect(await screen.findByTestId('list-count')).toHaveTextContent('2/2')
   })
 
-  it('切到快速审核显示审核器，切回显示列表', async () => {
+  it('切到精选显示审核器，切回显示列表', async () => {
     const user = userEvent.setup()
     await renderPage()
-    await user.click(screen.getByRole('tab', { name: /快速审核/ }))
+    await user.click(screen.getByRole('tab', { name: /精选/ }))
     expect(await screen.findByTestId('expression-reviewer')).toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: '表达' }))
     expect(await screen.findByTestId('expression-list')).toBeInTheDocument()

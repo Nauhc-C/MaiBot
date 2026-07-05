@@ -6,6 +6,7 @@
 
 import json
 import re
+import tomllib
 from functools import lru_cache
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -19,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from src.common.logger import get_logger
 from src.plugin_runtime import detect_host_application_version
+from src.plugin_runtime.local_sdk import read_local_sdk_version
 
 logger = get_logger("plugin_runtime.runner.manifest_validator")
 
@@ -628,6 +630,7 @@ class PluginManifest(_StrictManifestModel):
     id: str = Field(description="稳定插件 ID")
     plugin_type: str = Field(default="extension", description="插件类型")
     display: Optional[ManifestDisplay] = Field(default=None, description="插件展示元信息")
+    changelog: Optional[str] = Field(default=None, description="更新日志地址或插件内相对路径")
 
     @field_validator("version")
     @classmethod
@@ -690,6 +693,28 @@ class PluginManifest(_StrictManifestModel):
             if normalized_capability not in normalized_capabilities:
                 normalized_capabilities.append(normalized_capability)
         return normalized_capabilities
+
+    @field_validator("changelog")
+    @classmethod
+    def _validate_changelog(cls, value: Optional[str]) -> Optional[str]:
+        """校验可选更新日志声明。"""
+        if value is None:
+            return None
+
+        normalized_value = value.strip()
+        if not normalized_value:
+            raise ValueError("不能为空字符串")
+        if _HTTP_URL_PATTERN.fullmatch(normalized_value):
+            return normalized_value
+
+        changelog_path = Path(normalized_value)
+        if changelog_path.is_absolute() or any(part == ".." for part in changelog_path.parts):
+            raise ValueError("必须为插件目录内的相对路径或 http(s) URL")
+        if "\x00" in normalized_value or normalized_value.startswith(("/", "\\")):
+            raise ValueError("路径包含非法字符")
+        if changelog_path.suffix.lower() != ".md":
+            raise ValueError("插件内更新日志路径必须指向 Markdown 文件")
+        return normalized_value
 
     @model_validator(mode="after")
     def _validate_dependencies(self) -> "PluginManifest":
@@ -788,6 +813,7 @@ class ManifestValidator:
         sdk_version: str = "",
         project_root: Optional[Path] = None,
         validate_python_package_dependencies: bool = True,
+        log_errors: bool = True,
         log_compat_warnings: bool = True,
     ) -> None:
         """初始化 Manifest 校验器。
@@ -797,13 +823,16 @@ class ManifestValidator:
             sdk_version: 当前 SDK 版本号；留空时自动从运行环境中探测。
             project_root: 项目根目录；留空时自动推断。
             validate_python_package_dependencies: 是否校验 Python 包依赖与当前环境的关系。
+            log_errors: 是否输出 Manifest 校验错误；预扫描场景可关闭，由加载边界统一记录。
             log_compat_warnings: 是否输出兼容模式提示；预扫描场景可关闭以避免重复日志。
         """
         self._project_root: Path = project_root or self._resolve_project_root()
         self._host_version: str = host_version or self._detect_default_host_version(self._project_root)
         self._sdk_version: str = sdk_version or self._detect_default_sdk_version(self._project_root)
         self._validate_python_package_dependencies: bool = validate_python_package_dependencies
+        self._log_errors_enabled: bool = log_errors
         self._log_compat_warnings: bool = log_compat_warnings
+        self._logged_error_keys: Set[Tuple[str, Tuple[str, ...]]] = set()
         self.errors: List[str] = []
         self.warnings: List[str] = []
 
@@ -892,8 +921,8 @@ class ManifestValidator:
             self._log_errors(source=str(plugin_path))
             return None
 
-        manifest_id = str(manifest_data.get("id") or plugin_path.name).strip() or plugin_path.name
-        return self.parse_manifest(manifest_data, source=manifest_id)
+        manifest_source = str(manifest_data.get("id", "")).strip() or str(plugin_path)
+        return self.parse_manifest(manifest_data, source=manifest_source)
 
     def iter_plugin_manifests(
         self,
@@ -1138,10 +1167,22 @@ class ManifestValidator:
 
     def _log_errors(self, source: Optional[str] = None) -> None:
         """输出当前累计的 Manifest 校验错误。"""
+        if not self._log_errors_enabled:
+            return
         if not self.errors:
             return
 
         error_summary = "；".join(self.errors)
+        source_key = source or ""
+        error_key = (source_key, tuple(self.errors))
+        if error_key in self._logged_error_keys:
+            if source:
+                logger.debug(f"Manifest 校验失败 [{source}] 重复出现，已抑制重复错误日志: {error_summary}")
+                return
+            logger.debug(f"Manifest 校验失败重复出现，已抑制重复错误日志: {error_summary}")
+            return
+
+        self._logged_error_keys.add(error_key)
         if source:
             logger.error(f"Manifest 校验失败 [{source}]: 共 {len(self.errors)} 项，{error_summary}")
             return
@@ -1209,6 +1250,10 @@ class ManifestValidator:
         Returns:
             str: 探测到的 SDK 版本号；失败时返回空字符串。
         """
+        local_sdk_version = read_local_sdk_version(project_root=project_root)
+        if local_sdk_version and VersionComparator.is_valid_project_version(local_sdk_version):
+            return local_sdk_version
+
         try:
             raw_version = importlib_metadata.version("maibot-plugin-sdk")
             if VersionComparator.is_valid_project_version(raw_version):
@@ -1283,6 +1328,11 @@ class ManifestValidator:
         Returns:
             Optional[str]: 已安装版本号；未安装时返回 ``None``。
         """
+        if canonicalize_name(package_name) == "maibot-plugin-sdk":
+            local_sdk_version = read_local_sdk_version()
+            if local_sdk_version:
+                return local_sdk_version
+
         try:
             return importlib_metadata.version(package_name)
         except importlib_metadata.PackageNotFoundError:

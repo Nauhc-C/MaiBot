@@ -134,7 +134,7 @@ default_sample_size = 24
 
 - 长期记忆控制台：适合修改高频项，例如 embedding、检索、Episode、人物画像、导入与调优的常用开关。
 - 原始 TOML：适合复制整份配置、批量调整参数，或修改未在可视化表单中展示的高级项。
-- raw-only 高级项仍包括：`retrieval.fusion.*`、`retrieval.search.relation_intent.*`、`retrieval.search.graph_recall.*`、`retrieval.search.posterior_graph.*`、`retrieval.aggregate.*`、`memory.orphan.*`、`advanced.extraction_model`、`web.import.llm_retry.*`、`web.import.timeout.*`、`web.import.path_aliases`、`web.import.convert.*`、`web.tuning.llm_retry.*`、`web.tuning.eval_query_timeout_seconds`。
+- raw-only 高级项仍包括：`retrieval.search.relation_intent.*`、`retrieval.search.graph_recall.*`、`retrieval.search.posterior_graph.*`、`retrieval.aggregate.*`、`memory.orphan.*`、`advanced.extraction_model`、`web.import.llm_retry.*`、`web.import.timeout.*`、`web.import.path_aliases`、`web.import.convert.*`、`web.tuning.llm_retry.*`、`web.tuning.eval_query_timeout_seconds`。
 
 ## 1. 存储与嵌入
 
@@ -185,6 +185,40 @@ default_sample_size = 24
 - `retrieval.ppr_concurrency_limit` (默认 `4`)
 - `retrieval.enable_parallel` (默认 `true`)
 - `retrieval.relation_vectorization.enabled` (默认 `false`)
+- `retrieval.relation_vectorization.backfill_enabled` (默认 `false`)
+- `retrieval.relation_vectorization.write_on_import` (默认 `true`)
+- `retrieval.vector_pools.mode` (默认 `"dual"`)
+- `retrieval.vector_pools.graph_top_k` (默认 `40`)
+- `retrieval.vector_pools.graph_weight` (默认 `0.15`)
+
+### `retrieval.relation_vectorization` (`RelationVectorizationConfig`)
+
+关系向量化默认关闭。开启 `enabled` 后，运行时会允许关系写入向量库；开启 `backfill_enabled` 后，后台维护流程会为已有关系补写向量；`write_on_import` 控制摘要导入、网页导入和迁移脚本写入关系时是否同步写入关系向量。
+
+### `retrieval.vector_pools` (`VectorPoolsConfig`)
+
+双向量池检索默认使用 `dual`：段落向量池只召回段落，图谱向量池召回 `entity:<hash>` 和 `relation:<hash>`，再映射回支撑段落并作为 evidence 参与排序。切换为 `single` 可保持单向量池行为。
+
+常用键（默认值）：
+
+- `mode = "dual"` (`single`/`dual`)
+- `paragraph_top_k = 20`
+- `graph_top_k = 40`
+- `graph_expand_paragraph_k = 80`
+- `relation_expand_per_hit = 5`
+- `entity_expand_per_hit = 8`
+- `relation_evidence_weight = 1.0`
+- `entity_evidence_weight = 0.55`
+- `semantic_weight = 0.65`
+- `sparse_weight = 0.20`
+- `graph_weight = 0.15`
+- `relation_intent.graph_top_k = 80`
+- `relation_intent.semantic_weight = 0.45`
+- `relation_intent.sparse_weight = 0.15`
+- `relation_intent.graph_weight = 0.40`
+- `relation_intent.return_relation_items = false`
+
+`relation_vectorization.enabled` 控制关系向量是否写入图谱池，`vector_pools.mode` 控制检索时是否使用双池。两者语义不同。
 
 ### `retrieval.sparse` (`SparseBM25Config`)
 
@@ -310,6 +344,14 @@ chats = []
   `source_type=chat_summary` 或 `source=chat_summary:<session_id>` 命中；
   `episode` 裁剪 Episode 命中。
 - 人物画像当前保持全局聚合与缓存，不按群组隔离。
+
+### `global_memory_sharing_enabled`
+
+- 默认 `false`
+- 关闭时，普通记忆查询只检索当前聊天流以及 `shared_memory_groups`
+  配置出的同组聊天流。
+- 开启时，普通记忆查询会在所有聊天流范围内检索；
+  `shared_memory_groups` 会保留配置，但不再限制普通查询范围。
 
 ### `shared_memory_groups`
 

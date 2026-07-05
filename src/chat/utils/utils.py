@@ -10,6 +10,7 @@ import time
 
 from src.chat.message_receive.chat_manager import chat_manager as _chat_manager
 from src.chat.message_receive.message import SessionMessage
+from src.common.data_models.message_component_data_model import AtComponent
 from src.common.logger import get_logger
 from src.config.config import global_config
 from src.person_info.person_info import Person
@@ -129,111 +130,13 @@ def is_bot_self(platform: str, user_id: str) -> bool:
     return False
 
 
-def _strip_mention_markup(text: str) -> str:
-    msg_content = text
-    msg_content = re.sub(r"@(.+?)（(\d+)）", "", msg_content)
-    msg_content = re.sub(r"@<(.+?)(?=:(\d+))\:(\d+)>", "", msg_content)
-    msg_content = re.sub(r"\[回复 (.+?)\(((\d+)|未知id|你)\)：(.+?)\]，说：", "", msg_content)
-    msg_content = re.sub(r"\[回复<(.+?)(?=:(\d+))\:(\d+)>：(.+?)\]，说：", "", msg_content)
-    return msg_content.strip()
+def _has_at_component_targeting_bot(message: SessionMessage, platform: str) -> bool:
+    """检查消息中的结构化 @ 组件是否直接指向当前 bot。"""
 
-
-def _is_ascii_word_char(char: str) -> bool:
-    return char.isascii() and (char.isalnum() or char == "_")
-
-
-def _has_keyword_boundaries(text: str, start: int, end: int, keyword: str) -> bool:
-    if not any(char.isascii() and char.isalnum() for char in keyword):
-        return True
-    if start > 0 and _is_ascii_word_char(text[start - 1]):
-        return False
-    if end < len(text) and _is_ascii_word_char(text[end]):
-        return False
-    return True
-
-
-def _has_direct_mention_prefix(text: str, start: int) -> bool:
-    prefix = text[:start]
-    if not prefix.strip():
-        return True
-
-    trimmed_prefix = prefix.rstrip()
-    if not trimmed_prefix:
-        return True
-    if trimmed_prefix[-1] in "，,。.!！?？:：;；、\n\r\t([{【“‘\"'":
-        return True
-
-    return trimmed_prefix.strip().lower() in {"请", "麻烦", "拜托", "喂", "嘿", "hi", "hello"}
-
-
-def _has_direct_mention_suffix(text: str, end: int) -> bool:
-    suffix = text[end:].lstrip()
-    if not suffix:
-        return True
-
-    if suffix[0] in "，,。.!！?？:：;；、~～\n\r\t ":
-        return True
-
-    direct_starts = (
-        "在吗",
-        "在不在",
-        "醒醒",
-        "出来",
-        "帮",
-        "帮忙",
-        "看",
-        "看看",
-        "看下",
-        "看一下",
-        "查",
-        "查下",
-        "查一下",
-        "解释",
-        "分析",
-        "评价",
-        "说",
-        "讲",
-        "教",
-        "问",
-        "想问",
-        "告诉",
-        "给",
-        "发",
-        "来",
-        "救",
-        "听",
-        "请",
-        "麻烦",
-        "拜托",
-        "能",
-        "可以",
-        "可不可以",
-        "要不",
-        "要不要",
-        "你",
-        "妳",
-    )
-    if suffix.startswith(direct_starts):
-        return True
-
-    return bool(re.search(r"[?？吗嘛呢]$", suffix[:24]))
-
-
-def _is_direct_bot_name_mention(text: str, keyword: str) -> bool:
-    normalized_keyword = keyword.strip()
-    if not normalized_keyword:
-        return False
-
-    flags = re.IGNORECASE if any(char.isascii() and char.isalpha() for char in normalized_keyword) else 0
-    for match in re.finditer(re.escape(normalized_keyword), text, flags=flags):
-        start, end = match.span()
-        if not _has_keyword_boundaries(text, start, end, normalized_keyword):
-            continue
-        if not _has_direct_mention_prefix(text, start):
-            continue
-        if _has_direct_mention_suffix(text, end):
+    raw_message = getattr(message, "raw_message", None)
+    for component in getattr(raw_message, "components", []) or []:
+        if isinstance(component, AtComponent) and is_bot_self(platform, component.target_user_id):
             return True
-
     return False
 
 
@@ -258,14 +161,17 @@ def is_mentioned_bot_in_message(message: SessionMessage) -> tuple[bool, bool, fl
     if isinstance(add_cfg, dict):
         if add_cfg.get("at_bot") or add_cfg.get("is_mentioned"):
             is_mentioned = True
-            # 当提供数值型 is_mentioned 时，当作概率提升
-            try:
-                if add_cfg.get("is_mentioned") not in (None, ""):
-                    reply_probability = float(add_cfg.get("is_mentioned"))  # type: ignore
-            except Exception:
-                pass
+            if add_cfg.get("at_bot"):
+                is_at = True
+            # 当提供数值型 is_mentioned 时，当作概率提升；布尔提及标记只负责标记命中。
+            raw_mention_boost = add_cfg.get("is_mentioned")
+            if raw_mention_boost not in (None, "") and not isinstance(raw_mention_boost, bool):
+                reply_probability = float(raw_mention_boost)
 
-    # 2) 已经在上游设置过的 message.is_mentioned
+    # 2) 已经在上游设置过的 message.is_at / message.is_mentioned
+    if getattr(message, "is_at", False):
+        is_at = True
+        is_mentioned = True
     if getattr(message, "is_mentioned", False):
         is_mentioned = True
 
@@ -288,7 +194,12 @@ def is_mentioned_bot_in_message(message: SessionMessage) -> tuple[bool, bool, fl
         is_at = True
         is_mentioned = True
 
-    # 4) 统一的 @ 检测逻辑
+    # 4) 结构化 @ 组件检测。处理后的文本可能只剩群名片，不能依赖文本里的显示名判断。
+    if not is_at and _has_at_component_targeting_bot(message, platform):
+        is_at = True
+        is_mentioned = True
+
+    # 5) 统一的 @ 检测逻辑
     if current_account and not is_at and not is_mentioned:
         if platform == "qq":
             # QQ 格式: @<name:qq_id>
@@ -301,7 +212,7 @@ def is_mentioned_bot_in_message(message: SessionMessage) -> tuple[bool, bool, fl
                 is_at = True
                 is_mentioned = True
 
-    # 5) 统一的回复检测逻辑
+    # 6) 统一的回复检测逻辑
     if not is_mentioned:
         # 通用回复格式：包含 "(你)" 或 "（你）"
         if re.search(r"\[回复 .*?\(你\)：", text) or re.search(r"\[回复 .*?（你）：", text):
@@ -315,19 +226,25 @@ def is_mentioned_bot_in_message(message: SessionMessage) -> tuple[bool, bool, fl
             ):
                 is_mentioned = True
 
-    # 6) 名称/别名直接称呼（去除 @/回复标记后再匹配）
+    # 7) 名称/别名 提及（去除 @/回复标记后再匹配）
     if not is_mentioned and keywords:
-        msg_content = _strip_mention_markup(text)
+        msg_content = text
+        # 去除各种 @ 与 回复标记，避免误判
+        msg_content = re.sub(r"@(.+?)（(\d+)）", "", msg_content)
+        msg_content = re.sub(r"@<(.+?)(?=:(\d+))\:(\d+)>", "", msg_content)
+        msg_content = re.sub(r"\[回复 (.+?)\(((\d+)|未知id|你)\)：(.+?)\]，说：", "", msg_content)
+        msg_content = re.sub(r"\[回复<(.+?)(?=:(\d+))\:(\d+)>：(.+?)\]，说：", "", msg_content)
         for kw in keywords:
-            if _is_direct_bot_name_mention(msg_content, kw):
+            if kw and kw in msg_content:
                 is_mentioned = True
                 break
 
-    # 7) 概率设置
-    if is_at and getattr(global_config.chat, "inevitable_at_reply", 1):
+    # 8) 概率设置
+    reply_timing_config = global_config.chat.reply_timing
+    if is_at and reply_timing_config.inevitable_at_reply:
         reply_probability = 1.0
         logger.debug("被@，回复概率设置为100%")
-    elif is_mentioned and getattr(global_config.chat, "mentioned_bot_reply", 1):
+    elif is_mentioned and reply_timing_config.mentioned_bot_reply:
         reply_probability = max(reply_probability, 1.0)
         logger.debug("被提及，回复概率设置为100%")
 
@@ -356,7 +273,7 @@ async def get_embedding(text: str, request_type: str = "embedding") -> Optional[
 
 def split_into_sentences_w_remove_punctuation(text: str) -> list[str]:
     """将文本分割成句子，并根据概率合并
-    1. 识别分割点（。 ; 换行），但如果分割点左右都是英文字母则不分割。
+    1. 识别分割点（, ， 。 ; 空格），但如果分割点左右都是英文字母则不分割。
     2. 将文本分割成 (内容, 分隔符) 的元组。
     3. 根据原始文本长度计算合并概率，概率性地合并相邻段落。
     注意：此函数假定颜文字已在上层被保护。
@@ -413,8 +330,7 @@ def split_into_sentences_w_remove_punctuation(text: str) -> list[str]:
             inside_quote[idx] = in_quote
 
     # 定义分隔符（包含换行符）
-    # 最小化误切：默认只按句号、分号和换行切分，不再把逗号或普通空格当作句子边界。
-    separators = {"。", ";", "\n"}
+    separators = {"，", ",", " ", "。", ";", "\n"}
     segments = []
     current_segment = ""
 
@@ -591,8 +507,8 @@ def _get_random_default_reply() -> str:
         f"{global_config.bot.nickname}不知道",
         "不知道哦",
         "不知道",
-        "我一下子没想好",
-        "这个我得再想想",
+        "不晓得",
+        "懒得说",
         "()",
     ]
     return random.choice(default_replies)
@@ -663,9 +579,8 @@ def process_llm_response(text: str, enable_splitter: bool = True, enable_chinese
             logger.warning(f"分割后消息数量过多 ({len(sentences)} 条)，直接返回原文")
             sentences = [cleaned_text]
         else:
-            logger.warning(
-                f"分割后消息数量过多 ({len(sentences)} 条)，改为合并压缩到 {max_split_num} 条以内后发送"
-            )
+            logger.warning(f"分割后消息数量过多 ({len(sentences)} 条)，返回默认回复")
+            return [_get_random_default_reply()]
 
     sentences = merge_sentences_to_max_count(sentences, max_split_num)
 
@@ -715,7 +630,7 @@ def calculate_typing_time(
     if is_emoji:
         total_time = 1
 
-    typing_speed = global_config.chat.typing_speed
+    typing_speed = global_config.response_post_process.typing_speed
     if typing_speed <= 0:
         return 0
     total_time *= typing_speed
@@ -761,8 +676,11 @@ def protect_kaomoji(sentence):
     kaomoji_matches = kaomoji_pattern.findall(sentence)
     placeholder_to_kaomoji = {}
 
-    for idx, match in enumerate(kaomoji_matches):
+    for match in kaomoji_matches:
         kaomoji = match[0] or match[1]
+        if kaomoji.startswith("[表情包") and kaomoji.endswith("]"):
+            continue
+        idx = len(placeholder_to_kaomoji)
         placeholder = f"__KAOMOJI_{idx}__"
         sentence = sentence.replace(kaomoji, placeholder, 1)
         placeholder_to_kaomoji[placeholder] = kaomoji

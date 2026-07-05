@@ -1,18 +1,14 @@
-﻿import json
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Tuple
+
 import random
 import re
 import time
-from dataclasses import dataclass, field
-from datetime import datetime
-from io import BytesIO
-from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Tuple
 
-import base64
-from PIL import Image as PILImage
 from src.chat.message_receive.chat_manager import BotChatSession
 from src.chat.message_receive.message import SessionMessage
-from src.chat.utils.utils import get_chat_type_and_target_info
+from src.chat.utils.utils import get_chat_type_and_target_info, is_bot_self
 from src.common.data_models.llm_service_data_models import LLMGenerationOptions
 from src.common.data_models.message_component_data_model import (
     AtComponent,
@@ -36,7 +32,6 @@ from src.config.model_configs import ModelInfo
 from src.core.types import ActionInfo
 from src.llm_models.payload_content.message import Message, MessageBuilder, RoleType
 from src.maisaka.context.message_adapter import parse_speaker_content
-from src.maisaka.context.history import DEFAULT_CONTEXT_TIME_WINDOW_MINUTES, filter_history_by_time_window
 from src.maisaka.context.messages import (
     AssistantMessage,
     LLMContextMessage,
@@ -49,28 +44,13 @@ from src.maisaka.context.planner_messages import extract_quote_ids_from_message_
 from src.maisaka.display.prompt_cli_renderer import PromptCLIVisualizer
 from src.maisaka.memory.mid_term import is_mid_term_memory_message
 from src.maisaka.visual.message_limiter import limit_latest_images_in_messages
-from src.plugin_runtime.hook_payloads import (
-    rehydrate_prompt_messages_from_hook,
-    serialize_prompt_messages,
-    serialize_prompt_messages_for_hook,
-)
+from src.plugin_runtime.hook_payloads import deserialize_prompt_messages, serialize_prompt_messages
 
-from .local_mai_replyer import build_local_mai_replyer_messages
 from .maisaka_expression_selector import maisaka_expression_selector
 
 logger = get_logger("replyer")
 
-DEBUG_REPLY_CACHE_DIR = Path("logs/debug_reply_cache")
 REPLYER_MAX_HOOK_RETRIES = 3
-ROLE_IDENTIFICATION_QUERY_PATTERN = re.compile(
-    r"(哪个角色|什么角色|是谁|哪位|出处|来源|哪部(?:作品|动漫|游戏)|哪个作品|叫什么|认认|认出来)",
-    re.IGNORECASE,
-)
-_CATCHPHRASE_BLOCKLIST_MARKERS = (
-    "disable_catchphrases",
-    "no_catchphrases",
-    "no_desuwa",
-)
 TOOL_RESULT_MEDIA_SOURCE_KIND = "tool_result_media"
 
 
@@ -81,6 +61,22 @@ class MaisakaReplyContext:
     expression_habits: str = ""
     selected_expression_ids: List[int] = field(default_factory=list)
     selected_expressions: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class RichReplyCheckResult:
+    """丰富回复检查器的输出结果。"""
+
+    action: Literal["send", "rewrite"] = "send"
+    output_text: str = "<send>"
+    request_prompt: str = ""
+    request_messages: List[Any] = field(default_factory=list)
+    request_message_count: int = 0
+    reasoning_text: str = ""
+    model_name: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 class BaseMaisakaReplyGenerator:
@@ -124,10 +120,10 @@ class BaseMaisakaReplyGenerator:
             logger.warning(f"构建 Maisaka 人设提示词失败: {exc}")
             return "你的名字是麦麦。\n是人类。"
 
-    @classmethod
-    def _select_reply_style(cls) -> str:
+    @staticmethod
+    def _select_reply_style() -> str:
         """返回 replyer 使用的基础表达风格。"""
-        return global_config.personality.reply_style.strip()
+        return global_config.personality.reply_style
 
     @staticmethod
     def _select_temporary_reply_style() -> str:
@@ -155,23 +151,19 @@ class BaseMaisakaReplyGenerator:
 
     @staticmethod
     def _extract_visible_assistant_reply(message: AssistantMessage) -> str:
-        """提取内部 assistant 消息的可见文本。"""
-        return BaseMaisakaReplyGenerator._normalize_content(message.processed_plain_text.strip())
+        del message
+        return ""
 
     def _extract_guided_bot_reply(self, message: SessionBackedMessage) -> str:
-        """提取写回历史的 bot 自己回复文本。"""
+        # 只能根据结构化来源字段判断是否为 bot 自身写回的历史消息，
+        # 不能依赖昵称/群名片等可控文本，避免误判和提示注入。
         if message.source_kind != "guided_reply":
             return ""
 
         plain_text = message.processed_plain_text.strip()
-        if not plain_text:
-            return ""
-
-        _speaker_name, body = parse_speaker_content(plain_text)
-        normalized_body = body.strip() if body is not None else plain_text
-        if not normalized_body:
-            normalized_body = plain_text
-        return self._normalize_content(normalized_body)
+        _, body = parse_speaker_content(plain_text)
+        normalized_body = body.strip()
+        return self._normalize_content(normalized_body) if normalized_body else ""
 
     def _build_target_message_block(self, reply_message: Optional[SessionMessage]) -> str:
         if reply_message is None:
@@ -179,12 +171,22 @@ class BaseMaisakaReplyGenerator:
 
         user_info = reply_message.message_info.user_info
         sender_name = user_info.user_cardname or user_info.user_nickname or user_info.user_id
+        bot_name = global_config.bot.nickname.strip() or sender_name
         target_message_id = reply_message.message_id.strip() if reply_message.message_id else "未知"
         # target_time = reply_message.timestamp.strftime("%Y-%m-%d %H:%M:%S")
         quote_ids = extract_quote_ids_from_message_sequence(reply_message.raw_message)
         target_content = self._normalize_content(self._build_target_message_content(reply_message), limit=300)
         if not target_content:
             target_content = "[无可见文本内容]"
+
+        if is_bot_self(reply_message.platform, user_info.user_id):
+            return "\n".join(
+                [
+                    f"你想要补充说明你自己（{bot_name}） 发送的 msg_id为 {target_message_id} 的消息，"
+                    "你可以在这条目标消息的基础上补充发言，不要把你自己的发言当成别人的发言。",
+                    f"- 你之前的发言内容：{target_content}",
+                ]
+            )
 
         # target_lines = [
         #     "【本次回复目标】",
@@ -255,121 +257,6 @@ class BaseMaisakaReplyGenerator:
         return (reply_message.processed_plain_text or "").strip()
 
     @staticmethod
-    def _guess_image_format(image_bytes: bytes) -> str:
-        if not image_bytes:
-            return ""
-        try:
-            with PILImage.open(BytesIO(image_bytes)) as image:
-                image_format = (image.format or "").lower()
-                if image_format in {"jpg", "jpeg"}:
-                    return "jpeg"
-                return image_format
-        except Exception:
-            return ""
-
-    @staticmethod
-    def _is_visual_component(component: Any) -> bool:
-        return isinstance(component, (ImageComponent, EmojiComponent))
-
-    def _looks_like_role_identification_query(self, reply_message: Optional[SessionMessage]) -> bool:
-        if reply_message is None:
-            return False
-        target_content = self._build_target_message_content(reply_message).strip()
-        if not target_content:
-            return False
-        return bool(ROLE_IDENTIFICATION_QUERY_PATTERN.search(target_content))
-
-    async def _load_visual_component_bytes(self, component: Any) -> tuple[bytes, str]:
-        if isinstance(component, ImageComponent):
-            if not component.binary_data:
-                await component.load_image_binary()
-            image_bytes = component.binary_data
-        elif isinstance(component, EmojiComponent):
-            if not component.binary_data:
-                await component.load_emoji_binary()
-            image_bytes = component.binary_data
-        else:
-            return b"", ""
-
-        return image_bytes, self._guess_image_format(image_bytes)
-
-    async def _find_latest_visual_context(
-        self,
-        chat_history: List[LLMContextMessage],
-        reply_message: Optional[SessionMessage],
-    ) -> tuple[Optional[SessionMessage], Optional[Any], bytes, str]:
-        candidates: List[SessionMessage] = []
-        if reply_message is not None:
-            candidates.append(reply_message)
-
-        for message in reversed(chat_history):
-            if not isinstance(message, SessionBackedMessage):
-                continue
-            original_message = message.original_message
-            if original_message is None:
-                continue
-            candidates.append(original_message)
-
-        for candidate in candidates:
-            for component in candidate.raw_message.components:
-                if not self._is_visual_component(component):
-                    continue
-                try:
-                    image_bytes, image_format = await self._load_visual_component_bytes(component)
-                except Exception:
-                    continue
-                if image_bytes and image_format:
-                    return candidate, component, image_bytes, image_format
-        return None, None, b"", ""
-
-    async def _build_visual_identification_supplement(
-        self,
-        *,
-        chat_history: List[LLMContextMessage],
-        reply_message: Optional[SessionMessage],
-    ) -> str:
-        if not self._looks_like_role_identification_query(reply_message):
-            return ""
-
-        source_message, source_component, image_bytes, image_format = await self._find_latest_visual_context(
-            chat_history,
-            reply_message,
-        )
-        if source_message is None or source_component is None or not image_bytes or not image_format:
-            return ""
-
-        source_kind = "表情包" if isinstance(source_component, EmojiComponent) else "图片"
-        source_text = self._normalize_content(self._build_target_message_content(source_message), limit=180)
-        prompt_lines = [
-            f"用户正在追问上一条{source_kind}里的角色、出处或身份。",
-            "请直接根据图片判断最可能的角色名或作品出处。",
-            "如果不能完全确认，也请给出 1 到 3 个最可能候选，并简述你是依据哪些外观细节判断的。",
-            "不要只回答“无法确认”或“看不出来”，尽量给出可用猜测。",
-        ]
-        if source_text:
-            prompt_lines.append(f"上下文文字：{source_text}")
-
-        prompt = "\n".join(prompt_lines)
-        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-
-        try:
-            from src.chat.image_system.image_manager import vlm as image_vlm
-
-            generation_result = await image_vlm.generate_response_for_image(
-                prompt,
-                image_base64,
-                image_format,
-            )
-        except Exception as exc:
-            logger.warning(f"构建视觉识别补充失败: {exc}")
-            return ""
-
-        supplement = str(generation_result.response or "").strip()
-        if not supplement:
-            return ""
-        return f"【原图识别补充】\n{supplement}"
-
-    @staticmethod
     def _get_chat_prompt_for_chat(chat_id: str, is_group_chat: Optional[bool]) -> str:
         """根据聊天流 ID 获取匹配的额外 prompt。"""
         return ChatConfigUtils.get_chat_prompt_for_chat(chat_id, is_group_chat)
@@ -387,10 +274,10 @@ class BaseMaisakaReplyGenerator:
         prompt_lines: List[str] = []
 
         if is_group_chat is True:
-            if group_chat_prompt := global_config.chat.group_chat_prompt.strip():
+            if group_chat_prompt := global_config.chat.reply_style.group_chat_prompt.strip():
                 prompt_lines.append(f"通用注意事项：\n{group_chat_prompt}")
         elif is_group_chat is False:
-            if private_chat_prompt := global_config.chat.private_chat_prompts.strip():
+            if private_chat_prompt := global_config.chat.reply_style.private_chat_prompts.strip():
                 prompt_lines.append(f"通用注意事项：\n{private_chat_prompt}")
 
         if chat_prompt := self._get_chat_prompt_for_chat(session_id, is_group_chat).strip():
@@ -415,55 +302,17 @@ class BaseMaisakaReplyGenerator:
         """构建 replyer 的最终输出格式说明。"""
 
         locale = BaseMaisakaReplyGenerator._get_prompt_locale()
-        if not global_config.experimental.enable_replyer_format_output:
-            if locale.startswith("en"):
-                return (
-                    "Please do not output any extra content (including unnecessary prefixes or suffixes, "
-                    "colons, brackets, stickers, plain at, or @). Only output the message content itself."
-                )
-            if locale.startswith("ja"):
-                return (
-                    "余計な内容（不要な前置きや後置き、コロン、括弧、スタンプ、通常の at や @ など）は出力せず、"
-                    "発言内容だけを出力してください。"
-                )
-            return "请注意不要输出多余内容(包括不必要的前后缀，冒号，括号，表情包，@等 )，只输出发言内容就好。"
-
         if locale.startswith("en"):
             return (
-                "Only output the message fragments to send. Do not output explanations, Markdown, or code fences. "
-                "Use `<text>text</text>` for normal text; "
-                'to mention someone, use `<at msg_id="message id">display name</at>`; '
-                "use `<emoji>emotion or sticker description</emoji>` when you want to send a sticker. "
-                "To resend an existing image from context, use "
-                '`<image msg_id="message id" index="0">optional description</image>`; '
-                'for tool-result media, use `media_index="tool_result:call_x:0"` instead of `msg_id`. '
-                "You may combine fragments in send order, for example: "
-                '`<text>fine</text><image msg_id="123" index="0">that image</image>`.'
+                "Please do not output any extra content (including unnecessary prefixes or suffixes, "
+                "colons, brackets, stickers, plain at, or @). Only output the message content itself."
             )
-
         if locale.startswith("ja"):
             return (
-                "送信するメッセージフラグメントだけを出力してください。説明、Markdown、コードブロックは出力しないでください。"
-                "通常の文字は `<text>文字</text>` を使います；"
-                '`<at msg_id="メッセージID">表示名</at>` で at できます；'
-                "スタンプを送りたいときは `<emoji>感情またはスタンプ説明</emoji>` を使います。"
-                "文脈中の既存画像を送りたいときは "
-                '`<image msg_id="メッセージID" index="0">任意の説明</image>` を使います。'
-                'ツール結果のメディアは `msg_id` の代わりに `media_index="tool_result:call_x:0"` を使います。'
-                "送信順に複数のフラグメントを組み合わせてもかまいません。例："
-                '`<text>まあいいか</text><image msg_id="123" index="0">その画像</image>`。'
+                "余計な内容（不要な前置きや後置き、コロン、括弧、スタンプ、通常の at や @ など）は出力せず、"
+                "発言内容だけを出力してください。"
             )
-
-        return (
-            "请只输出要发送的消息片段，不要输出解释、Markdown 或代码块。"
-            "普通文字使用 `<text>文字</text>`；"
-            '需要 at 某人时，使用 `<at msg_id="消息编号">显示名</at>`；'
-            "想发送表情包时，使用 `<emoji>情绪或表情描述</emoji>`。"
-            '想转发上下文里已有图片时，使用 `<image msg_id="消息编号" index="0">可选描述</image>`。'
-            '工具返回媒体用 `media_index="tool_result:call_x:0"` 代替 `msg_id`。'
-            "可以按发送顺序组合多个片段，例如："
-            '`<text>行吧</text><image msg_id="123" index="0">那张图</image>`。'
-        )
+        return "请注意不要输出多余内容(包括不必要的前后缀，冒号，括号，表情包，@等 )，只输出发言内容就好。"
 
     @staticmethod
     def _replace_regex_capture_groups(reaction: str, match: re.Match[str]) -> str:
@@ -584,15 +433,13 @@ class BaseMaisakaReplyGenerator:
         return system_prompt
 
     def _build_reply_instruction(self) -> str:
-        if global_config.experimental.enable_replyer_format_output:
-            return self._build_replyer_output_instruction()
-        return "请自然地回复。不要输出多余说明、括号、@ 或额外标记，只输出实际要发送的内容。"
+        return "以上是你的思考，你可以参考其中内容或根据实际情况调整回复内容，请自然地回复。不要输出多余说明、括号、@ 或额外标记，只输出实际要发送的内容。"
 
     def _build_final_user_message(
         self,
-        chat_history: List[LLMContextMessage],
         reply_message: Optional[SessionMessage],
         reply_reason: str,
+        reply_guide: str = "",
         reply_requirements: str = "",
         keywords_reaction_prompt: str = "",
     ) -> str:
@@ -602,8 +449,9 @@ class BaseMaisakaReplyGenerator:
         if target_message_block:
             sections.append(target_message_block)
         reply_reference_lines: List[str] = []
-        if reply_reason.strip():
-            reply_reference_lines.append(f"【最新推理】\n{reply_reason.strip()}")
+        latest_thought = reply_reason.strip() or reply_guide.strip()
+        if latest_thought:
+            reply_reference_lines.append(f"你的最新想法：\n{latest_thought}")
         if reply_reference_lines:
             sections.append("【回复信息参考】\n" + "\n\n".join(reply_reference_lines))
         if reply_requirements.strip():
@@ -667,9 +515,6 @@ class BaseMaisakaReplyGenerator:
         enable_visual_message: bool = False,
         reply_tool_args: Optional[Dict[str, Any]] = None,
     ) -> List[Message]:
-        if global_config.debug.enable_local_mai_replyer:
-            return build_local_mai_replyer_messages(reply_reason, reply_tool_args)
-
         messages: List[Message] = []
         keywords_reaction_prompt = self._build_keyword_reaction_prompt(
             chat_history=chat_history,
@@ -682,9 +527,9 @@ class BaseMaisakaReplyGenerator:
             stream_id=stream_id,
         )
         final_user_message = self._build_final_user_message(
-            chat_history=chat_history,
             reply_message=reply_message,
             reply_reason=reply_reason,
+            reply_guide=str((reply_tool_args or {}).get("reply_guide") or ""),
             reply_requirements=reply_requirements,
             keywords_reaction_prompt=keywords_reaction_prompt,
         )
@@ -708,6 +553,145 @@ class BaseMaisakaReplyGenerator:
             )
         return messages
 
+    @staticmethod
+    def _format_checker_new_message(message: LLMContextMessage) -> str:
+        message_id = str(getattr(message, "message_id", "") or "").strip()
+        text = str(getattr(message, "processed_plain_text", "") or "").strip()
+        if not text:
+            text = str(getattr(message, "visible_text", "") or "").strip()
+        if not text:
+            text = "[无可见文本内容]"
+        if message_id:
+            return f"- msg_id={message_id}：{text}"
+        return f"- {text}"
+
+    @classmethod
+    def _extract_checker_new_messages(
+        cls,
+        original_chat_history: List[LLMContextMessage],
+        latest_chat_history: Optional[List[LLMContextMessage]],
+    ) -> List[LLMContextMessage]:
+        if not latest_chat_history or len(latest_chat_history) <= len(original_chat_history):
+            return []
+        candidates = latest_chat_history[len(original_chat_history) :]
+        return [message for message in candidates if cls._should_keep_replyer_history_message(message)]
+
+    def _build_rich_reply_checker_user_message(
+        self,
+        *,
+        generated_reply: str,
+        new_messages: List[LLMContextMessage],
+    ) -> str:
+        sections = [
+            "你现在是 replyer 输出检查器。你拥有和 replyer 相同的聊天上下文，但最终任务不同。",
+            "你可以看到 replyer 刚刚生成、尚未发送的回复，请选择接下来要做的事。",
+            f"replyer 生成的回复：\n{generated_reply.strip()}",
+        ]
+        if new_messages:
+            rendered_new_messages = "\n".join(self._format_checker_new_message(message) for message in new_messages)
+            sections.append(
+                "replyer 生成回复之后，聊天里又出现了新消息。请把这些新消息当成最新 user message 提示：\n"
+                f"{rendered_new_messages}"
+            )
+        sections.append(
+            "你只能选择以下动作之一：\n"
+            "1. 插入表情包：使用 <emoji 情绪或描述>，例如 <emoji happy>。\n"
+            "2. 插入图片：使用 <pic msg_id=消息编号 index=图片序号>；也可以使用 "
+            "<pic media_index=tool_result:call_id:item_index index=0>。图片定位语义与 send_image 工具一致。\n"
+            "3. 插入 at：使用 <at msg_id>，表示 at 这条消息的发送者。\n"
+            "4. 分成多条消息发送：在两个组件之间使用 <split>，表示从这里切到下一条消息。\n"
+            "5. 不做改动直接发送：只输出 <send>。"
+        )
+        sections.append(
+            "如果要保留 replyer 原文本并插入元素，用 <text> 表示原文本。"
+            "例如 <text><pic msg_id=abc index=0>，或 <at abc><text><emoji 开心>。"
+            "如果希望拆成多条消息，例如先发文字再发表情，可以输出 <text><split><emoji 开心>。"
+            "不要输出解释、理由、自然语言前后缀或代码块，只输出格式化结果。"
+        )
+        return "\n\n".join(sections)
+
+    async def check_rich_reply_output(
+        self,
+        *,
+        generated_reply: str,
+        chat_history: List[LLMContextMessage],
+        latest_chat_history: Optional[List[LLMContextMessage]],
+        reply_message: Optional[SessionMessage],
+        reply_reason: str,
+        expression_habits: str = "",
+        stream_id: Optional[str] = None,
+        reply_tool_args: Optional[Dict[str, Any]] = None,
+    ) -> RichReplyCheckResult:
+        """在 replyer 生成文本后，用同上下文检查是否需要插入富回复元素。"""
+
+        filtered_history = [message for message in chat_history if self._should_keep_replyer_history_message(message)]
+        new_messages = self._extract_checker_new_messages(chat_history, latest_chat_history)
+        preview_chat_id = self._resolve_session_id(stream_id)
+        checker_model = self._llm_client_cls(
+            task_name=str(getattr(self.express_model, "task_name", "") or "replyer").strip() or "replyer",
+            request_type=f"{self.request_type}.checker",
+            session_id=preview_chat_id,
+        )
+
+        request_messages: List[Message] = []
+        prompt_preview = ""
+
+        async def message_factory(_client: object, model_info: Optional[ModelInfo] = None) -> List[Message]:
+            nonlocal request_messages, prompt_preview
+            built_messages = self._build_request_messages(
+                chat_history=filtered_history,
+                reply_message=reply_message,
+                reply_reason=reply_reason or "",
+                expression_habits=expression_habits,
+                stream_id=stream_id,
+                enable_visual_message=self._resolve_enable_visual_message(model_info),
+                reply_tool_args=reply_tool_args,
+            )
+            checker_user_message = self._build_rich_reply_checker_user_message(
+                generated_reply=generated_reply,
+                new_messages=new_messages,
+            )
+            if built_messages:
+                built_messages[-1] = MessageBuilder().set_role(RoleType.User).add_text_content(checker_user_message).build()
+            else:
+                built_messages.append(
+                    MessageBuilder().set_role(RoleType.User).add_text_content(checker_user_message).build()
+                )
+            request_messages = limit_latest_images_in_messages(
+                built_messages,
+                max_image_num=global_config.visual.max_image_num,
+            )
+            prompt_preview = PromptCLIVisualizer.build_prompt_dump_text(request_messages)
+            return request_messages
+
+        generation_result = await checker_model.generate_response_with_messages(
+            message_factory=message_factory,
+            options=LLMGenerationOptions(),
+        )
+        output_text = (generation_result.response or "").strip()
+        normalized_output = output_text.lower()
+        if normalized_output == "<send>" or not output_text:
+            action: Literal["send", "rewrite"] = "send"
+            output_text = "<send>"
+        else:
+            action = "rewrite"
+
+        return RichReplyCheckResult(
+            action=action,
+            output_text=output_text,
+            request_prompt=prompt_preview,
+            request_messages=PromptCLIVisualizer.build_structured_message_payload(
+                request_messages,
+                keep_base64=False,
+            ),
+            request_message_count=len(request_messages),
+            reasoning_text=generation_result.reasoning or "",
+            model_name=generation_result.model_name or "",
+            prompt_tokens=generation_result.prompt_tokens,
+            completion_tokens=generation_result.completion_tokens,
+            total_tokens=generation_result.total_tokens,
+        )
+
     async def _invoke_before_model_request_hook(
         self,
         *,
@@ -726,10 +710,9 @@ class BaseMaisakaReplyGenerator:
         """触发 replyer 模型请求前 Hook，允许插件改写最终 messages。"""
 
         try:
-            serialized_messages, image_ref_store = serialize_prompt_messages_for_hook(request_messages)
             hook_result = await self._get_runtime_manager().invoke_hook(
                 "maisaka.replyer.before_model_request",
-                messages=serialized_messages,
+                messages=serialize_prompt_messages(request_messages),
                 session_id=session_id,
                 request_type=self.request_type,
                 task_name=active_task_name,
@@ -753,7 +736,7 @@ class BaseMaisakaReplyGenerator:
             return request_messages
 
         try:
-            return rehydrate_prompt_messages_from_hook(raw_messages, image_ref_store)
+            return deserialize_prompt_messages(raw_messages)
         except Exception as exc:
             logger.warning(f"Hook maisaka.replyer.before_model_request 返回的 messages 无法反序列化，已忽略: {exc}")
             return request_messages
@@ -798,33 +781,13 @@ class BaseMaisakaReplyGenerator:
         return dict(raw_value) if isinstance(raw_value, dict) else {}
 
     @staticmethod
-    def _build_reply_requirements(
-        extra_prompt: str,
-        retry_constraints: List[str],
-        reply_tool_args: Optional[Dict[str, Any]] = None,
-    ) -> str:
+    def _build_reply_requirements(extra_prompt: str, retry_constraints: List[str]) -> str:
         """构建 replyer 本轮额外回复要求。"""
 
         blocks: List[str] = []
         normalized_extra_prompt = extra_prompt.strip()
         if normalized_extra_prompt:
             blocks.append(f"【额外回复要求】\n{normalized_extra_prompt}")
-        normalized_reply_guide = str((reply_tool_args or {}).get("reply_guide") or "").strip()
-        if normalized_reply_guide:
-            blocks.append(f"【Planner回复指引】\n{normalized_reply_guide}")
-        if any(bool((reply_tool_args or {}).get(marker)) for marker in _CATCHPHRASE_BLOCKLIST_MARKERS):
-            blocks.append(
-                "【复读口癖限制】\n"
-                "这次回复是复读/重放/转述场景，禁止使用 desuwa、desuno、teyo、maa 等尾部口癖。"
-                "保持自然、克制、尽量贴近原意，不要额外加个性化结尾。"
-            )
-        blocks.append(
-            "【引用回复策略】\n"
-            "是否引用由你自己判断。"
-            "只有当直接指向对方上一条发言、需要明确承接语境、或引用能提升可读性时才引用；"
-            "如果只是普通接话、闲聊、顺着话题继续，不要强制引用。"
-            "如果你决定引用，请在 reply 工具里显式传 set_quote=true；不需要引用时传 set_quote=false。"
-        )
         if retry_constraints:
             retry_lines = ["【重生成约束】"]
             retry_lines.extend(retry_constraints[-REPLYER_MAX_HOOK_RETRIES:])
@@ -845,40 +808,6 @@ class BaseMaisakaReplyGenerator:
         from src.plugin_runtime.integration import get_plugin_runtime_manager
 
         return get_plugin_runtime_manager()
-
-    @staticmethod
-    def _build_debug_request_filename(stream_id: str, model_name: str) -> str:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        raw_name = f"{timestamp}_{stream_id or 'unknown'}_{model_name or 'unknown'}.json"
-        return "".join(char if char.isalnum() or char in ("-", "_", ".") else "_" for char in raw_name)
-
-    def _save_debug_reply_request_body(
-        self,
-        *,
-        stream_id: str,
-        model_name: str,
-        messages: List[Message],
-        response_body: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        if not global_config.debug.record_reply_request:
-            return
-
-        try:
-            DEBUG_REPLY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            request_body = {
-                "model": model_name,
-                "request_type": self.request_type,
-                "stream_id": stream_id,
-                "created_at": datetime.now().isoformat(timespec="seconds"),
-                "messages": serialize_prompt_messages(messages),
-                "response_body": response_body or {},
-            }
-            file_path = DEBUG_REPLY_CACHE_DIR / self._build_debug_request_filename(stream_id, model_name)
-            with file_path.open("w", encoding="utf-8") as file:
-                json.dump(request_body, file, ensure_ascii=False, indent=2)
-            logger.info(f"Replyer 请求体已保存: {file_path.resolve()}")
-        except Exception as exc:
-            logger.warning(f"保存 Replyer 请求体失败: {exc}")
 
     async def _build_reply_context(
         self,
@@ -924,157 +853,9 @@ class BaseMaisakaReplyGenerator:
 
     @classmethod
     def _should_keep_replyer_history_message(cls, message: LLMContextMessage) -> bool:
-        """replyer 只接收真实聊天上下文，不接收参考、工具结果、工具媒体和中期摘要。"""
+        """replyer 只接收真实聊天上下文，不接收参考、工具结果、工具媒体和聊天回想。"""
 
         return not cls._is_replyer_filtered_history_message(message)
-
-    @staticmethod
-    def _filter_replyer_history_by_time_window(
-        chat_history: list[LLMContextMessage],
-        *,
-        time_window_minutes: int = DEFAULT_CONTEXT_TIME_WINDOW_MINUTES,
-    ) -> list[LLMContextMessage]:
-        """按时间窗进一步截断 replyer 输入历史。"""
-
-        return filter_history_by_time_window(
-            chat_history,
-            time_window_minutes=time_window_minutes,
-        )
-
-    async def _generate_local_mai_reply_with_context(
-        self,
-        *,
-        result: ReplyGenerationResult,
-        finalize: Callable[[bool], Tuple[bool, ReplyGenerationResult]],
-        overall_started_at: float,
-        stream_id: Optional[str],
-        reply_reason: str,
-        reply_tool_args: Dict[str, Any],
-    ) -> Tuple[bool, ReplyGenerationResult]:
-        """执行本地麦麦 replyer 的极简生成流程。"""
-
-        preview_chat_id = self._resolve_session_id(stream_id)
-        result.selected_expression_ids = []
-        result.selected_expression_details = []
-
-        prompt_started_at = time.perf_counter()
-        try:
-            request_messages = build_local_mai_replyer_messages(reply_reason or "", reply_tool_args)
-        except Exception as exc:
-            result.error_message = f"构建本地麦麦 Replyer 提示词失败: {exc}"
-            result.metrics = GenerationMetrics(
-                overall_ms=round((time.perf_counter() - overall_started_at) * 1000, 2),
-            )
-            return finalize(False)
-
-        prompt_ms = round((time.perf_counter() - prompt_started_at) * 1000, 2)
-        prompt_preview = PromptCLIVisualizer._build_prompt_dump_text(request_messages)
-
-        async def message_factory(_client: object, model_info: Optional[ModelInfo] = None) -> List[Message]:
-            del _client
-            del model_info
-            return request_messages
-
-        llm_started_at = time.perf_counter()
-        try:
-            generation_result = await self.express_model.generate_response_with_messages(
-                message_factory=message_factory,
-                options=LLMGenerationOptions(),
-            )
-        except Exception as exc:
-            logger.exception("本地麦麦 Replyer 调用失败")
-            result.error_message = str(exc)
-            result.metrics = GenerationMetrics(
-                prompt_ms=prompt_ms,
-                llm_ms=round((time.perf_counter() - llm_started_at) * 1000, 2),
-                overall_ms=round((time.perf_counter() - overall_started_at) * 1000, 2),
-            )
-            return finalize(False)
-
-        llm_ms = round((time.perf_counter() - llm_started_at) * 1000, 2)
-        response_text = (generation_result.response or "").strip()
-        result.completion.request_prompt = prompt_preview
-        result.request_message_count = len(request_messages)
-        result.request_messages = PromptCLIVisualizer._build_structured_message_payload(
-            request_messages,
-            keep_base64=False,
-        )
-        self._save_debug_reply_request_body(
-            stream_id=preview_chat_id,
-            model_name=generation_result.model_name or "",
-            messages=request_messages,
-            response_body={
-                "response": generation_result.response,
-                "reasoning": generation_result.reasoning,
-                "model_name": generation_result.model_name,
-                "tool_calls": [
-                    {
-                        "id": tool_call.call_id,
-                        "name": tool_call.func_name,
-                        "arguments": tool_call.args,
-                        "extra_content": tool_call.extra_content,
-                    }
-                    for tool_call in (generation_result.tool_calls or [])
-                ],
-                "prompt_tokens": generation_result.prompt_tokens,
-                "completion_tokens": generation_result.completion_tokens,
-                "total_tokens": generation_result.total_tokens,
-                "prompt_cache_hit_tokens": getattr(generation_result, "prompt_cache_hit_tokens", 0) or 0,
-                "prompt_cache_miss_tokens": getattr(generation_result, "prompt_cache_miss_tokens", 0) or 0,
-                "replyer_retry_count": 0,
-                "local_mai_replyer": True,
-            },
-        )
-
-        result.success = bool(response_text)
-        result.completion = LLMCompletionResult(
-            request_prompt=prompt_preview,
-            response_text=response_text,
-            reasoning_text=generation_result.reasoning or "",
-            model_name=generation_result.model_name or "",
-            tool_calls=generation_result.tool_calls or [],
-            prompt_tokens=generation_result.prompt_tokens,
-            completion_tokens=generation_result.completion_tokens,
-            total_tokens=generation_result.total_tokens,
-        )
-        result.metrics = GenerationMetrics(
-            prompt_ms=prompt_ms,
-            llm_ms=llm_ms,
-            overall_ms=round((time.perf_counter() - overall_started_at) * 1000, 2),
-            stage_logs=[
-                f"prompt: {prompt_ms} ms",
-                f"llm: {llm_ms} ms",
-            ],
-        )
-        prompt_cache_hit_tokens = getattr(generation_result, "prompt_cache_hit_tokens", 0) or 0
-        prompt_cache_miss_tokens = getattr(generation_result, "prompt_cache_miss_tokens", 0) or 0
-        if prompt_cache_miss_tokens == 0 and prompt_cache_hit_tokens > 0:
-            prompt_cache_miss_tokens = max(generation_result.prompt_tokens - prompt_cache_hit_tokens, 0)
-        prompt_cache_total_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens
-        prompt_cache_hit_rate = (
-            prompt_cache_hit_tokens / prompt_cache_total_tokens * 100 if prompt_cache_total_tokens > 0 else 0
-        )
-        result.metrics.extra["prompt_cache_hit_tokens"] = prompt_cache_hit_tokens
-        result.metrics.extra["prompt_cache_miss_tokens"] = prompt_cache_miss_tokens
-        result.metrics.extra["prompt_cache_hit_rate"] = round(prompt_cache_hit_rate, 2)
-        result.metrics.extra["replyer_retry_count"] = 0
-        result.metrics.extra["replyer_attempt_count"] = 1
-        result.metrics.extra["replyer_aggregate_prompt_tokens"] = generation_result.prompt_tokens
-        result.metrics.extra["replyer_aggregate_completion_tokens"] = generation_result.completion_tokens
-        result.metrics.extra["replyer_aggregate_total_tokens"] = generation_result.total_tokens
-        result.metrics.extra["local_mai_replyer"] = True
-
-        if not result.success:
-            result.error_message = "本地麦麦 Replyer 返回了空内容"
-            logger.warning("本地麦麦 Replyer 返回了空内容")
-            return finalize(False)
-
-        logger.info(
-            f"本地麦麦 Replyer 生成成功 文本={response_text!r} "
-            f"总耗时ms={result.metrics.overall_ms}"
-        )
-        result.text_fragments = [response_text]
-        return finalize(True)
 
     async def generate_reply_with_context(
         self,
@@ -1117,16 +898,6 @@ class BaseMaisakaReplyGenerator:
             return finalize(False)
 
         active_reply_tool_args = self._normalize_reply_tool_args(reply_tool_args)
-        if global_config.debug.enable_local_mai_replyer:
-            return await self._generate_local_mai_reply_with_context(
-                result=result,
-                finalize=finalize,
-                overall_started_at=overall_started_at,
-                stream_id=stream_id,
-                reply_reason=reply_reason,
-                reply_tool_args=active_reply_tool_args,
-            )
-
         if chat_history is None:
             result.error_message = "聊天历史为空"
             return finalize(False)
@@ -1136,10 +907,7 @@ class BaseMaisakaReplyGenerator:
         #     f"历史条数={len(chat_history)} 目标ID={reply_message.message_id if reply_message else None}"
         # )
 
-        filtered_history = [
-            message for message in chat_history if self._should_keep_replyer_history_message(message)
-        ]
-        filtered_history = self._filter_replyer_history_by_time_window(filtered_history)
+        filtered_history = [message for message in chat_history if self._should_keep_replyer_history_message(message)]
 
         try:
             reply_context = await self._build_reply_context(
@@ -1169,14 +937,6 @@ class BaseMaisakaReplyGenerator:
         result.selected_expression_details = (
             list(selected_expressions) if selected_expressions is not None else list(reply_context.selected_expressions)
         )
-        try:
-            visual_identification_supplement = await self._build_visual_identification_supplement(
-                chat_history=filtered_history,
-                reply_message=reply_message,
-            )
-        except Exception as exc:
-            logger.warning(f"构建视觉识别补充上下文失败: {exc}")
-            visual_identification_supplement = ""
 
         # logger.info(
         #     f"回复上下文完成 流={stream_id} 已选表达={result.selected_expression_ids!r}"
@@ -1224,12 +984,7 @@ class BaseMaisakaReplyGenerator:
             active_reply_requirements = self._build_reply_requirements(
                 str(before_request_kwargs.get("extra_prompt") or ""),
                 retry_constraints,
-                active_reply_tool_args,
             )
-            if visual_identification_supplement:
-                active_reply_requirements = "\n\n".join(
-                    block for block in (active_reply_requirements, visual_identification_supplement) if block.strip()
-                )
 
             prompt_started_at = time.perf_counter()
             try:
@@ -1253,7 +1008,7 @@ class BaseMaisakaReplyGenerator:
                 return finalize(False)
 
             prompt_ms = round((time.perf_counter() - prompt_started_at) * 1000, 2)
-            prompt_preview = PromptCLIVisualizer._build_prompt_dump_text(request_messages)
+            prompt_preview = PromptCLIVisualizer.build_prompt_dump_text(request_messages)
 
             async def message_factory(
                 _client: object,
@@ -1291,7 +1046,7 @@ class BaseMaisakaReplyGenerator:
                     reply_tool_args=dict(reply_tool_args_for_attempt),
                 )
                 prompt_ms = round((time.perf_counter() - prompt_started_at) * 1000, 2)
-                prompt_preview = PromptCLIVisualizer._build_prompt_dump_text(request_messages)
+                prompt_preview = PromptCLIVisualizer.build_prompt_dump_text(request_messages)
                 return request_messages
 
             llm_started_at = time.perf_counter()
@@ -1319,34 +1074,9 @@ class BaseMaisakaReplyGenerator:
 
             result.completion.request_prompt = prompt_preview
             result.request_message_count = len(request_messages)
-            result.request_messages = PromptCLIVisualizer._build_structured_message_payload(
+            result.request_messages = PromptCLIVisualizer.build_structured_message_payload(
                 request_messages,
                 keep_base64=False,
-            )
-            self._save_debug_reply_request_body(
-                stream_id=preview_chat_id,
-                model_name=generation_result.model_name or "",
-                messages=request_messages,
-                response_body={
-                    "response": generation_result.response,
-                    "reasoning": generation_result.reasoning,
-                    "model_name": generation_result.model_name,
-                    "tool_calls": [
-                        {
-                            "id": tool_call.call_id,
-                            "name": tool_call.func_name,
-                            "arguments": tool_call.args,
-                            "extra_content": tool_call.extra_content,
-                        }
-                        for tool_call in (generation_result.tool_calls or [])
-                    ],
-                    "prompt_tokens": generation_result.prompt_tokens,
-                    "completion_tokens": generation_result.completion_tokens,
-                    "total_tokens": generation_result.total_tokens,
-                    "prompt_cache_hit_tokens": getattr(generation_result, "prompt_cache_hit_tokens", 0) or 0,
-                    "prompt_cache_miss_tokens": getattr(generation_result, "prompt_cache_miss_tokens", 0) or 0,
-                    "replyer_retry_count": retry_count,
-                },
             )
             llm_ms = round((time.perf_counter() - llm_started_at) * 1000, 2)
             response_text = (generation_result.response or "").strip()
@@ -1492,11 +1222,11 @@ class BaseMaisakaReplyGenerator:
         if hook_rewrite_events:
             result.metrics.extra["replyer_hook_rewrite_events"] = list(hook_rewrite_events)
         logger.info(
-            "Replyer KV cache usage - "
-            f"hit_tokens={prompt_cache_hit_tokens}, "
-            f"miss_tokens={prompt_cache_miss_tokens}, "
-            f"hit_rate={prompt_cache_hit_rate:.2f}%, "
-            f"prompt_tokens={generation_result.prompt_tokens}"
+            "Replyer缓存："
+            f"命中={prompt_cache_hit_tokens}, "
+            f"未命中={prompt_cache_miss_tokens}, "
+            f"命中率={prompt_cache_hit_rate:.2f}%, "
+            f"token使用={generation_result.prompt_tokens}"
         )
 
         if not result.success:

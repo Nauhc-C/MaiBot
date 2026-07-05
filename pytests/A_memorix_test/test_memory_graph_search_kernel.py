@@ -102,6 +102,10 @@ class _ScopedSearchMetadataStore:
     def get_paragraph_stale_relation_marks_batch(self, paragraph_hashes: list[str]) -> dict[str, list[dict[str, Any]]]:
         return {str(paragraph_hash): [] for paragraph_hash in paragraph_hashes}
 
+    def list_fuzzy_modify_plans(self, **kwargs: Any) -> list[dict[str, Any]]:
+        del kwargs
+        return []
+
 
 class _RetrievalTypeFilterMetadataStore(_ScopedSearchMetadataStore):
     def __init__(self) -> None:
@@ -424,6 +428,86 @@ def test_retrieval_type_filter_is_disabled_by_default() -> None:
     assert kernel._filter_hits_by_retrieval_type_scope(hits) == hits
 
 
+def test_chat_scope_filter_accepts_chat_ids_metadata() -> None:
+    kernel = _build_retrieval_filter_kernel(config={})
+    hits = [
+        {
+            "type": "paragraph",
+            "hash": "para-rebound",
+            "content": "重复导入后绑定到当前聊天流的段落。",
+            "metadata": {"chat_ids": ["session-current"]},
+        },
+        {
+            "type": "relation",
+            "hash": "rel-rebound",
+            "content": "Alice 持有 地图",
+            "metadata": {},
+        },
+    ]
+    kernel.metadata_store.paragraphs["para-rebound"] = {
+        "hash": "para-rebound",
+        "content": "重复导入后绑定到当前聊天流的段落。",
+        "source": "web_import:demo.txt",
+        "metadata": {"chat_ids": ["session-current"]},
+    }
+    kernel.metadata_store.paragraphs["para-rebound-relation"] = {
+        "hash": "para-rebound-relation",
+        "content": "重复导入后绑定到当前聊天流的关系支撑段落。",
+        "source": "web_import:demo.txt",
+        "metadata": {"chat_ids": ["session-current"]},
+    }
+    kernel.metadata_store.relation_paragraphs["rel-rebound"] = [
+        kernel.metadata_store.paragraphs["para-rebound-relation"]
+    ]
+
+    filtered = kernel._filter_hits_by_chat_scope(hits, chat_id="session-current")
+
+    assert [item["hash"] for item in filtered] == ["para-rebound", "rel-rebound"]
+
+
+def test_chat_scope_filter_defers_stale_metadata_to_store_for_rebound_records() -> None:
+    kernel = _build_retrieval_filter_kernel(config={})
+    hits = [
+        {
+            "type": "paragraph",
+            "hash": "para-rebound",
+            "content": "重复导入后绑定到当前聊天流的段落。",
+            "metadata": {"chat_ids": ["session-other"]},
+        },
+        {
+            "type": "relation",
+            "hash": "rel-rebound",
+            "content": "Alice 持有 地图",
+            "metadata": {"chat_ids": ["session-other"]},
+        },
+        {
+            "type": "episode",
+            "hash": "episode-other",
+            "content": "其他聊天流片段。",
+            "metadata": {"chat_ids": ["session-other"]},
+        },
+    ]
+    kernel.metadata_store.paragraphs["para-rebound"] = {
+        "hash": "para-rebound",
+        "content": "重复导入后绑定到当前聊天流的段落。",
+        "source": "web_import:demo.txt",
+        "metadata": {"chat_ids": ["session-current"]},
+    }
+    kernel.metadata_store.paragraphs["para-rebound-relation"] = {
+        "hash": "para-rebound-relation",
+        "content": "重复导入后绑定到当前聊天流的关系支撑段落。",
+        "source": "web_import:demo.txt",
+        "metadata": {"chat_ids": ["session-current"]},
+    }
+    kernel.metadata_store.relation_paragraphs["rel-rebound"] = [
+        kernel.metadata_store.paragraphs["para-rebound-relation"]
+    ]
+
+    filtered = kernel._filter_hits_by_chat_scope(hits, chat_id="session-current")
+
+    assert [item["hash"] for item in filtered] == ["para-rebound", "rel-rebound"]
+
+
 def test_retrieval_type_filter_requires_enabled_flag() -> None:
     kernel = _build_retrieval_filter_kernel(
         config={
@@ -498,6 +582,58 @@ def test_retrieval_type_filter_matches_group_blacklist(monkeypatch: pytest.Monke
     filtered = kernel._filter_hits_by_retrieval_type_scope(hits)
 
     assert [item["hash"] for item in filtered] == ["para-summary-current"]
+
+
+def test_retrieval_type_filter_keeps_current_group_when_source_is_blacklisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kernel = _build_retrieval_filter_kernel(
+        config={
+            "filter": {
+                "retrieval": {
+                    "chat_summary": {
+                        "enabled": True,
+                        "mode": "blacklist",
+                        "chats": ["group:group-current"],
+                    }
+                }
+            }
+        }
+    )
+
+    monkeypatch.setattr(
+        "src.A_memorix.core.runtime.sdk_memory_kernel.chat_manager.get_existing_session_by_session_id",
+        lambda session_id: type(
+            "Session",
+            (),
+            {
+                "group_id": "group-current" if session_id == "session-current" else "group-other",
+                "user_id": "",
+            },
+        )(),
+    )
+    hits = [
+        {
+            "type": "paragraph",
+            "hash": "para-summary-current",
+            "content": "当前群聊摘要。",
+            "metadata": {"chat_id": "session-current", "source_type": "chat_summary"},
+        },
+        {
+            "type": "paragraph",
+            "hash": "para-summary-other",
+            "content": "其他群聊摘要。",
+            "metadata": {"chat_id": "session-other", "source_type": "chat_summary"},
+        },
+    ]
+
+    filtered = kernel._filter_hits_by_retrieval_type_scope(
+        hits,
+        current_stream_id="session-current",
+        current_group_id="group-current",
+    )
+
+    assert [item["hash"] for item in filtered] == ["para-summary-current", "para-summary-other"]
 
 
 def test_retrieval_type_filter_matches_stream_when_session_unresolved(
@@ -603,6 +739,44 @@ async def test_search_memory_respect_filter_false_skips_retrieval_type_filter(tm
             limit=10,
             mode="search",
             respect_filter=False,
+        )
+    )
+
+    assert [item["hash"] for item in payload["hits"]] == ["para-stream-other", "para-stream-current"]
+
+
+@pytest.mark.asyncio
+async def test_search_memory_retrieval_type_filter_keeps_current_chat_even_when_not_whitelisted(
+    tmp_path,
+) -> None:
+    kernel = _build_retrieval_filter_search_kernel(
+        tmp_path,
+        config={
+            "retrieval": {
+                "search": {
+                    "smart_fallback": {"enabled": False},
+                    "safe_content_dedup": {"enabled": False},
+                }
+            },
+            "filter": {
+                "retrieval": {
+                    "chat_stream": {
+                        "enabled": True,
+                        "mode": "whitelist",
+                        "chats": ["stream:session-other"],
+                    }
+                }
+            },
+        },
+    )
+
+    payload = await kernel.search_memory(
+        KernelSearchRequest(
+            query="普通记忆",
+            limit=10,
+            mode="search",
+            chat_id="session-current",
+            shared_chat_ids=("session-current", "session-other"),
         )
     )
 

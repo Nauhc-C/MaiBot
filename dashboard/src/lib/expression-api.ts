@@ -17,6 +17,8 @@ import type {
   ExpressionDeleteResponse,
   ExpressionDetailResponse,
   ExpressionClearResponse,
+  ExpressionClusterListResponse,
+  ExpressionClusterMemberListResponse,
   ExpressionExportItem,
   ExpressionExportResponse,
   ExpressionImportResponse,
@@ -62,16 +64,16 @@ export async function getExpressionChatTargets(
 }
 
 /**
- * 获取表达互通组列表
+ * 获取表达共享组列表
  */
 export async function getExpressionGroups(
   params: { include_legacy?: boolean } = {}
 ): Promise<ExpressionGroupListResponse['data']> {
   const data = await backendApi.get<ExpressionGroupListResponse>(`${API_BASE}/groups`, {
     query: { include_legacy: params.include_legacy ? true : undefined },
-    errorMessage: '获取表达互通组失败',
+    errorMessage: '获取表达共享组失败',
   })
-  return requireSuccess(data, '获取表达互通组失败').data
+  return requireSuccess(data, '获取表达共享组失败').data
 }
 
 /**
@@ -280,6 +282,33 @@ export async function getExpressionStats(
     errorMessage: '获取统计数据失败',
   })
   return requireSuccess(data, '获取统计数据失败').data
+}
+
+/**
+ * 获取表达向量聚类摘要。
+ */
+export async function getExpressionClusters(): Promise<ExpressionClusterListResponse> {
+  const data = await backendApi.get<ExpressionClusterListResponse>(`${API_BASE}/clusters`, {
+    errorMessage: '获取表达聚类失败',
+  })
+  return requireSuccess(data, '获取表达聚类失败')
+}
+
+/**
+ * 获取指定表达聚类的完整成员。
+ */
+export async function getExpressionClusterMembers(params: {
+  cluster_id: number
+  profile_marker?: string
+}): Promise<ExpressionClusterMemberListResponse> {
+  const data = await backendApi.get<ExpressionClusterMemberListResponse>(
+    `${API_BASE}/clusters/${params.cluster_id}/members`,
+    {
+      query: { profile_marker: params.profile_marker || undefined },
+      errorMessage: '获取表达聚类成员失败',
+    }
+  )
+  return requireSuccess(data, '获取表达聚类成员失败')
 }
 
 // ============ 审核相关 API ============

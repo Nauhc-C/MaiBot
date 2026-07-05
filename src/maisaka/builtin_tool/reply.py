@@ -1,33 +1,25 @@
 ﻿"""reply 内置工具。"""
 
-import traceback
 from typing import Any, Optional
+import traceback
 
 from src.chat.replyer.replyer_manager import replyer_manager
 from src.cli.maisaka_cli_sender import CLI_PLATFORM_NAME, render_cli_message
-from src.common.data_models.reply_generation_data_models import ReplyGenerationResult
+from src.common.data_models.reply_generation_data_models import ReplyGenerationResult, build_reply_monitor_detail
 from src.common.logger import get_logger
 from src.config import config as config_module
 from src.core.tooling import ToolExecutionContext, ToolExecutionResult, ToolInvocation, ToolSpec
-from src.maisaka.context.history import DEFAULT_CONTEXT_TIME_WINDOW_MINUTES, filter_history_by_time_window
 from src.maisaka.context.message_adapter import build_visible_text_from_sequence
 from src.services import send_service
 
 from .context import BuiltinToolRuntimeContext
 
 logger = get_logger("maisaka_builtin_reply")
-_REPLY_TOOL_INTERNAL_ARGUMENTS = {"msg_id", "set_quote", "reference_info"}
-_REPLAY_CATCHPHRASE_MARKERS = (
-    "复读",
-    "重复",
-    "replay",
-    "repeat",
-    "echo",
-    "照着说",
-    "照着发",
-    "原样",
-    "照搬",
-)
+_REPLY_TOOL_INTERNAL_ARGUMENTS = {"msg_id", "set_quote"}
+
+
+def _use_expression_intent() -> bool:
+    return config_module.global_config.expression.expression_selection_mode == "vector_intent"
 
 
 async def _run_expression_selector(tool_ctx: BuiltinToolRuntimeContext, system_prompt: str) -> str:
@@ -43,29 +35,64 @@ async def _run_expression_selector(tool_ctx: BuiltinToolRuntimeContext, system_p
 def get_tool_spec() -> ToolSpec:
     """获取 reply 工具声明。"""
 
+    properties: dict[str, Any] = {
+        "msg_id": {
+            "type": "string",
+            "description": "要回复的消息msg_id。",
+        },
+        "set_quote": {
+            "type": "boolean",
+            "description": "以引用回复的方式发送这条回复，不用每句都引用。",
+            "default": True,
+        },
+        "reply_guide": {
+            "type": "string",
+            "description": "回复需要注意的事项和回复指引",
+        },
+    }
+    if _use_expression_intent():
+        properties["expression_intent"] = {
+            "type": "object",
+            "description": (
+                "可选。给 replyer 表达方式选择使用的结构化意图，不是回复正文。"
+                "当这次回复需要特定语气、场景或话术时填写，避免表达选择只按关键词匹配。"
+            ),
+            "properties": {
+                "focus": {
+                    "type": "string",
+                    "description": "本次表达主要应该贴合的目标消息、片段或话题。",
+                },
+                "reply_act": {
+                    "type": "string",
+                    "description": "这次回复要完成的动作，例如澄清、安抚、调侃、追问、解释边界。",
+                },
+                "scene": {
+                    "type": "string",
+                    "description": "当前表达场景，例如技术排查、截图分享、撒娇玩笑、价格询问。",
+                },
+                "tone": {
+                    "type": "string",
+                    "description": "期望语气，例如轻松、可靠、吐槽、委婉、简短肯定。",
+                },
+                "prefer": {
+                    "type": "array",
+                    "description": "优先考虑的表达类型或话术倾向。",
+                    "items": {"type": "string"},
+                },
+                "avoid": {
+                    "type": "array",
+                    "description": "需要避免的表达类型、误判方向或不该注入的具体结论。",
+                    "items": {"type": "string"},
+                },
+            },
+        }
+
     return ToolSpec(
         name="reply",
         description="根据当前思考生成并发送一条可见回复。",
         parameters_schema={
             "type": "object",
-            "properties": {
-                "msg_id": {
-                    "type": "string",
-                    "description": "要回复的消息msg_id。",
-                },
-                "set_quote": {
-                    "type": "boolean",
-                    "description": "是否使用引用回复；由模型根据上下文自行判断，建议显式传 true 或 false。",
-                },
-                "reply_guide": {
-                    "type": "string",
-                    "description": "回复需要注意的事项和回复指引",
-                },
-                "disable_catchphrases": {
-                    "type": "boolean",
-                    "description": "是否禁止 desuwa 等口癖；可用于复读、转述或重放类回复。",
-                },
-            },
+            "properties": properties,
             "required": ["msg_id"],
         },
         provider_name="maisaka_builtin",
@@ -101,26 +128,6 @@ def _build_send_result(
     }
 
 
-def _coerce_optional_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    normalized_value = str(value).strip().lower()
-    if normalized_value in {"1", "true", "yes", "on", "retry"}:
-        return True
-    if normalized_value in {"0", "false", "no", "off", "continue"}:
-        return False
-    return default
-
-
-def _looks_like_replay(*texts: str) -> bool:
-    """判断本次回复是否像复读/重放场景。"""
-
-    normalized_text = " ".join(text for text in texts if text).lower()
-    return any(marker.lower() in normalized_text for marker in _REPLAY_CATCHPHRASE_MARKERS)
-
-
 async def handle_tool(
     tool_ctx: BuiltinToolRuntimeContext,
     invocation: ToolInvocation,
@@ -130,17 +137,15 @@ async def handle_tool(
 
     latest_thought = context.reasoning if context is not None else invocation.reasoning
     target_message_id = str(invocation.arguments.get("msg_id") or "").strip()
-    set_quote = _coerce_optional_bool(invocation.arguments.get("set_quote"), default=False)
+    set_quote = bool(invocation.arguments.get("set_quote", True))
     reply_tool_args = {
         key: value
         for key, value in dict(invocation.arguments or {}).items()
         if key not in _REPLY_TOOL_INTERNAL_ARGUMENTS
     }
-    if not _coerce_optional_bool(reply_tool_args.get("disable_catchphrases"), default=False):
-        reply_guide = str(reply_tool_args.get("reply_guide") or "")
-        if _looks_like_replay(latest_thought or "", reply_guide):
-            reply_tool_args["disable_catchphrases"] = True
-    enable_reply_quote = bool(config_module.global_config.chat.enable_reply_quote)
+    if not _use_expression_intent():
+        reply_tool_args.pop("expression_intent", None)
+    enable_reply_quote = bool(config_module.global_config.chat.reply_style.enable_reply_quote)
     effective_set_quote = set_quote and enable_reply_quote
 
     if not target_message_id:
@@ -177,10 +182,10 @@ async def handle_tool(
             "Maisaka 回复生成器当前不可用。",
         )
 
-    replyer_chat_history = filter_history_by_time_window(
-        list(tool_ctx.runtime._chat_history),
-        time_window_minutes=DEFAULT_CONTEXT_TIME_WINDOW_MINUTES,
-    )
+    rich_reply_enabled = bool(config_module.global_config.experimental.enable_rich_reply)
+    rich_reply_events: list[dict[str, Any]] = []
+    rich_reply_checker_records: list[dict[str, Any]] = []
+    replyer_chat_history = list(tool_ctx.runtime._chat_history)
     try:
         success, reply_result = await replyer.generate_reply_with_context(
             reply_reason=latest_thought,
@@ -203,9 +208,73 @@ async def handle_tool(
             "生成可见回复时发生异常。",
         )
 
-    reply_metadata = _build_monitor_metadata(reply_result)
     reply_text = reply_result.completion.response_text.strip() if success else ""
+    original_reply_text_for_rich_output = reply_text
+    if rich_reply_enabled and reply_text:
+        reply_result.metrics.extra["rich_reply_original_response"] = original_reply_text_for_rich_output
+        try:
+            check_result = await replyer.check_rich_reply_output(
+                generated_reply=reply_text,
+                chat_history=replyer_chat_history,
+                latest_chat_history=list(tool_ctx.runtime._chat_history),
+                reply_message=target_message,
+                reply_reason=latest_thought,
+                stream_id=tool_ctx.runtime.session_id,
+                reply_tool_args=reply_tool_args,
+            )
+        except Exception as exc:
+            logger.exception(f"{tool_ctx.runtime.log_prefix} 丰富回复检查器执行异常: {exc}")
+        else:
+            rich_reply_event = {
+                "attempt": 1,
+                "action": check_result.action,
+                "output": check_result.output_text,
+                "model_name": check_result.model_name,
+                "prompt_tokens": check_result.prompt_tokens,
+                "completion_tokens": check_result.completion_tokens,
+                "total_tokens": check_result.total_tokens,
+            }
+            rich_reply_events.append(rich_reply_event)
+            reply_result.metrics.extra["rich_reply_checker_output"] = check_result.output_text
+            rich_reply_checker_records.append(
+                {
+                    "prompt_title": "Reply Checker Prompt #1",
+                    "reasoning_title": "Reply Checker 思考",
+                    "output_title": "Reply Checker 输出",
+                    "prompt_category": "replyer",
+                    "request_kind": "replyer_checker",
+                    "selection_reason": (
+                        f"会话ID: {tool_ctx.runtime.session_id}\n"
+                        f"目标消息: {target_message_id}\n"
+                        f"检查器动作: {check_result.action}"
+                    ),
+                    "request_messages": check_result.request_messages,
+                    "prompt_text": check_result.request_prompt,
+                    "output_text": check_result.output_text,
+                    "reasoning_text": check_result.reasoning_text,
+                    "metrics": {
+                        "model_name": check_result.model_name,
+                        "prompt_tokens": check_result.prompt_tokens,
+                        "completion_tokens": check_result.completion_tokens,
+                        "total_tokens": check_result.total_tokens,
+                    },
+                }
+            )
+
+            if check_result.action == "rewrite":
+                reply_text = check_result.output_text
+                reply_result.metrics.extra["rich_reply_checker_request_message_count"] = check_result.request_message_count
+                reply_result.metrics.extra["rich_reply_checker_request_messages"] = check_result.request_messages
+                reply_result.metrics.extra["rich_reply_checker_reasoning"] = check_result.reasoning_text
+
+    if rich_reply_events:
+        reply_result.metrics.extra["rich_reply_checker_events"] = rich_reply_events
+    if rich_reply_checker_records:
+        reply_result.metrics.extra["rich_reply_checker_records"] = rich_reply_checker_records
+
     if not reply_text:
+        reply_result.monitor_detail = build_reply_monitor_detail(reply_result)
+        reply_metadata = _build_monitor_metadata(reply_result)
         logger.warning(
             f"{tool_ctx.runtime.log_prefix} 回复生成器返回空文本: "
             f"目标消息编号={target_message_id} 错误信息={reply_result.error_message!r}"
@@ -216,9 +285,30 @@ async def handle_tool(
             metadata=reply_metadata,
         )
 
-    reply_sequences = await tool_ctx.post_process_reply_message_sequences_async(reply_text)
+    try:
+        if rich_reply_enabled:
+            reply_sequences = await tool_ctx.post_process_rich_reply_message_sequences_async(
+                reply_text,
+                original_reply_text_for_rich_output,
+            )
+        else:
+            reply_sequences = await tool_ctx.post_process_reply_message_sequences_async(reply_text)
+    except Exception as exc:
+        reply_result.completion.response_text = reply_text
+        reply_result.monitor_detail = build_reply_monitor_detail(reply_result)
+        reply_metadata = _build_monitor_metadata(reply_result)
+        logger.exception(f"{tool_ctx.runtime.log_prefix} 解析丰富回复输出失败: {exc}")
+        return tool_ctx.build_failure_result(
+            invocation.tool_name,
+            f"解析丰富回复输出失败：{exc}",
+            metadata=reply_metadata,
+        )
     reply_segments = [build_visible_text_from_sequence(sequence) for sequence in reply_sequences]
     combined_reply_text = "".join(reply_segments)
+    reply_result.completion.response_text = combined_reply_text
+    reply_result.text_fragments = reply_segments
+    reply_result.monitor_detail = build_reply_monitor_detail(reply_result)
+    reply_metadata = _build_monitor_metadata(reply_result)
     sent_message_ids: list[str] = []
     send_results: list[dict[str, Any]] = []
     try:

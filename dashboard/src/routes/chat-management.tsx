@@ -5,13 +5,15 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
-  Info,
+  Edit3,
   Plus,
   RefreshCw,
+  Save,
   Search,
   Trash2,
   UserRound,
   UsersRound,
+  X,
 } from 'lucide-react'
 import type { CSSProperties, PointerEvent, ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -19,6 +21,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { DashboardTabBar, DashboardTabTrigger } from '@/components/ui/dashboard-tabs'
 import {
   Dialog,
   DialogBody,
@@ -41,26 +45,56 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Tabs } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import { useResolvedAvatarUrl } from '@/lib/avatar-url'
 import {
   deleteChatStream,
+  deleteChatStreamPrompt,
   deleteChatStreamTalkFrequency,
   getChatStreamDetail,
   getChatStreams,
+  updateChatStreamLearning,
   updateChatStreamTalkFrequency,
+  upsertChatStreamPrompt,
   type ChatConfigRule,
   type ChatLearningStatus,
+  type ChatPromptRule,
   type ChatStream,
   type ChatStreamDeleteResult,
   type ChatTalkFrequencyRule,
   type ChatStreamDetail,
   type ChatStreamType,
 } from '@/lib/chat-management-api'
+import { getBotConfig, updateBotConfigSection } from '@/lib/config-api'
 import { useToast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 10
 type ChatTypeFilter = 'all' | ChatStreamType
+type ChatManagementView = 'groups' | 'streams'
+type MutualGroupKind = 'expression' | 'jargon' | 'memory'
+type LearningKind = 'expression' | 'jargon' | 'behavior'
+const MUTUAL_GROUP_CHAT_RESULT_LIMIT = 50
+
+const MUTUAL_GROUP_KIND_LABEL: Record<MutualGroupKind, string> = {
+  expression: '表达',
+  jargon: '黑话',
+  memory: '记忆',
+}
+
+interface TargetItem {
+  platform: string
+  item_id: string
+  rule_type?: ChatStreamType | string
+  type?: ChatStreamType | string
+}
+
+interface ChatStreamGroupConfig {
+  targets?: TargetItem[]
+  expression_groups?: TargetItem[]
+  jargon_groups?: TargetItem[]
+}
 
 function formatTimestamp(timestamp: number | null): string {
   if (!timestamp) {
@@ -85,6 +119,76 @@ function getChatTypeText(chatType: ChatStreamType): string {
 
 function getChatLogicalId(chat: ChatStream): string {
   return chat.target_id || (chat.chat_type === 'group' ? chat.group_id : chat.user_id) || '-'
+}
+
+function getTargetRuleType(target: TargetItem): ChatStreamType {
+  return target.rule_type === 'private' || target.type === 'private' ? 'private' : 'group'
+}
+
+function normalizeTarget(target: unknown): TargetItem | null {
+  if (!target || typeof target !== 'object') {
+    return null
+  }
+  const rawTarget = target as Record<string, unknown>
+  const platform = String(rawTarget.platform ?? '').trim()
+  const itemId = String(rawTarget.item_id ?? '').trim()
+  const rawRuleType = rawTarget.rule_type ?? rawTarget.type
+  const ruleType = rawRuleType === 'private' ? 'private' : 'group'
+  if (!platform || !itemId) {
+    return null
+  }
+  return { platform, item_id: itemId, rule_type: ruleType }
+}
+
+function normalizeMutualGroups(value: unknown): ChatStreamGroupConfig[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value.map((group) => {
+    if (!group || typeof group !== 'object') {
+      return { targets: [] }
+    }
+    const rawGroup = group as ChatStreamGroupConfig
+    const rawTargets =
+      rawGroup.targets ?? rawGroup.expression_groups ?? rawGroup.jargon_groups ?? []
+    const targets = Array.isArray(rawTargets)
+      ? rawTargets.map(normalizeTarget).filter((target): target is TargetItem => target !== null)
+      : []
+    return { targets }
+  })
+}
+
+function serializeMutualGroups(groups: ChatStreamGroupConfig[]): ChatStreamGroupConfig[] {
+  return groups.map((group) => ({
+    targets: (group.targets ?? []).map((target) => ({
+      platform: target.platform,
+      item_id: target.item_id,
+      rule_type: getTargetRuleType(target),
+    })),
+  }))
+}
+
+function targetKey(target: TargetItem): string {
+  return `${target.platform}:${target.item_id}:${getTargetRuleType(target)}`
+}
+
+function targetLabel(target: TargetItem): string {
+  return `${target.platform}:${target.item_id}:${getChatTypeText(getTargetRuleType(target))}`
+}
+
+function getTargetDisplayName(
+  target: TargetItem,
+  chatNameByTargetKey: Map<string, string>
+): string {
+  return chatNameByTargetKey.get(targetKey(target)) ?? '未找到聊天流'
+}
+
+function chatToTarget(chat: ChatStream): TargetItem {
+  return {
+    platform: chat.platform,
+    item_id: getChatLogicalId(chat),
+    rule_type: chat.chat_type,
+  }
 }
 
 function HoverScrollText({
@@ -195,7 +299,10 @@ function formatRuleTarget(rule: ChatConfigRule | null): string {
 
 function StatusBadge({ enabled }: { enabled: boolean }) {
   return (
-    <Badge variant={enabled ? 'default' : 'outline'} className={enabled ? '' : 'text-muted-foreground'}>
+    <Badge
+      variant={enabled ? 'default' : 'outline'}
+      className={enabled ? '' : 'text-muted-foreground'}
+    >
       {enabled ? '开启' : '关闭'}
     </Badge>
   )
@@ -208,28 +315,80 @@ function ChatStreamAvatar({ chat }: { chat: ChatStream }) {
   const Icon = chat.chat_type === 'group' ? UsersRound : UserRound
 
   return (
-    <Avatar className="h-8 w-8 rounded-md border-2 border-border ring-1 ring-background">
-      {avatarUrl && <AvatarImage src={avatarUrl} alt={`${chat.display_name} 的头像`} className="object-cover" />}
-      <AvatarFallback className="rounded-md text-muted-foreground">
+    <Avatar className="border-border ring-background h-8 w-8 rounded-md border-2 ring-1">
+      {avatarUrl && (
+        <AvatarImage src={avatarUrl} alt={`${chat.display_name} 的头像`} className="object-cover" />
+      )}
+      <AvatarFallback className="text-muted-foreground rounded-md">
         <Icon className="h-4 w-4" />
       </AvatarFallback>
     </Avatar>
   )
 }
 
-function ConfigStatusRow({ title, status }: { title: string; status: ChatLearningStatus }) {
+function ConfigStatusRow({
+  detail,
+  kind,
+  title,
+  status,
+}: {
+  detail: ChatStreamDetail
+  kind: LearningKind
+  title: string
+  status: ChatLearningStatus
+}) {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const updateMutation = useMutation({
+    mutationFn: (payload: { learn: boolean; use: boolean }) =>
+      updateChatStreamLearning(detail.session_id, kind, payload),
+    onSuccess: (nextDetail) => {
+      queryClient.setQueryData(['chat-stream-detail', detail.session_id], nextDetail)
+      void queryClient.invalidateQueries({ queryKey: ['chat-streams'] })
+      toast({ title: `${title}学习配置已保存` })
+    },
+    onError: (error) => {
+      toast({
+        title: `${title}学习配置保存失败`,
+        description: error instanceof Error ? error.message : '请稍后重试',
+        variant: 'destructive',
+      })
+    },
+  })
+  const isSaving = updateMutation.isPending
+
+  const saveStatus = (nextStatus: { learn: boolean; use: boolean }) => {
+    updateMutation.mutate(nextStatus)
+  }
+
   return (
     <div className="grid gap-3 rounded-md border p-3 text-sm lg:grid-cols-[5rem_1fr_1fr_minmax(12rem,1.5fr)] lg:items-center">
       <div className="text-base font-medium">{title}</div>
       <div className="flex items-center justify-between gap-3 lg:justify-start">
-        <span className="text-muted-foreground">使用</span>
+        <Label className="text-muted-foreground flex items-center gap-2">
+          <Checkbox
+            checked={status.use}
+            disabled={isSaving}
+            onCheckedChange={(checked) =>
+              saveStatus({ use: checked === true, learn: status.learn })
+            }
+          />
+          使用
+        </Label>
         <StatusBadge enabled={status.use} />
       </div>
       <div className="flex items-center justify-between gap-3 lg:justify-start">
-        <span className="text-muted-foreground">学习</span>
+        <Label className="text-muted-foreground flex items-center gap-2">
+          <Checkbox
+            checked={status.learn}
+            disabled={isSaving}
+            onCheckedChange={(checked) => saveStatus({ use: status.use, learn: checked === true })}
+          />
+          学习
+        </Label>
         <StatusBadge enabled={status.learn} />
       </div>
-      <div className="min-w-0 text-xs text-muted-foreground">
+      <div className="text-muted-foreground min-w-0 text-xs">
         命中规则：<span className="break-all">{formatRuleTarget(status.matched_rule)}</span>
       </div>
     </div>
@@ -367,7 +526,7 @@ function FrequencySummaryItem({
   return (
     <div className="min-w-0 space-y-1 text-sm">
       <div className="text-muted-foreground">{label}</div>
-      <div className="whitespace-nowrap font-mono font-semibold tabular-nums">
+      <div className="font-mono font-semibold whitespace-nowrap tabular-nums">
         {formatValue ? formatFrequencySummary(value) : value}
       </div>
     </div>
@@ -475,11 +634,9 @@ function TalkFrequencyRuleEditor({
   })
 
   return (
-    <div className="grid gap-3 rounded-md border bg-muted/25 p-3 sm:grid-cols-[minmax(8rem,12rem)_1fr_auto] sm:items-end">
+    <div className="bg-muted/25 grid gap-3 rounded-md border p-3 sm:grid-cols-[minmax(8rem,12rem)_1fr_auto] sm:items-end">
       <div className="space-y-2">
-        <Label className="text-xs">
-          {isNewRule ? '新增时间段' : '时间段'}
-        </Label>
+        <Label className="text-xs">{isNewRule ? '新增时间段' : '时间段'}</Label>
         <Input
           value={time}
           placeholder="* 或 HH:MM-HH:MM"
@@ -511,7 +668,7 @@ function TalkFrequencyRuleEditor({
             type="button"
             variant="ghost"
             size="icon"
-            className="shrink-0 text-destructive hover:text-destructive"
+            className="text-destructive hover:text-destructive shrink-0"
             disabled={deleteMutation.isPending}
             aria-label={`删除时间段 ${rule.time || '默认'} 的发言频率规则`}
             onClick={() => deleteMutation.mutate()}
@@ -612,9 +769,7 @@ function TalkFrequencyTimelineRule({
     }
     const nextMinute = getTimelineMinuteFromClient(event.clientX, timelineElement)
     const nextRange =
-      edge === 'start'
-        ? { ...range, start: nextMinute }
-        : { ...range, end: nextMinute }
+      edge === 'start' ? { ...range, start: nextMinute } : { ...range, end: nextMinute }
     setTime(formatTalkTimeRange(nextRange))
   }
 
@@ -626,9 +781,9 @@ function TalkFrequencyTimelineRule({
   }
 
   return (
-    <div className="grid min-w-0 gap-3 rounded-md border bg-muted/25 p-3 xl:grid-cols-[minmax(12rem,1fr)_8rem_8rem] xl:items-center">
+    <div className="bg-muted/25 grid min-w-0 gap-3 rounded-md border p-3 xl:grid-cols-[minmax(12rem,1fr)_8rem_8rem] xl:items-center">
       <div className="min-w-0">
-        <div className="relative mb-1 h-4 px-1 text-[10px] text-muted-foreground">
+        <div className="text-muted-foreground relative mb-1 h-4 px-1 text-[10px]">
           {TIMELINE_TICKS.map((hour) => (
             <span
               key={hour}
@@ -639,11 +794,11 @@ function TalkFrequencyTimelineRule({
             </span>
           ))}
         </div>
-        <div className="relative h-8 rounded-md border bg-background" data-chat-talk-timeline-track>
+        <div className="bg-background relative h-8 rounded-md border" data-chat-talk-timeline-track>
           {TIMELINE_TICKS.slice(1, -1).map((hour) => (
             <span
               key={hour}
-              className="absolute top-0 h-full border-l border-dashed border-muted-foreground/20"
+              className="border-muted-foreground/20 absolute top-0 h-full border-l border-dashed"
               style={{ left: `${(hour / 24) * 100}%` }}
             />
           ))}
@@ -662,12 +817,15 @@ function TalkFrequencyTimelineRule({
             <>
               <button
                 type="button"
-                className="absolute top-1/2 h-7 w-2 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-sm border border-background bg-foreground/80"
+                className="border-background bg-foreground/80 absolute top-1/2 h-7 w-2 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-sm border"
                 style={{ left: `${(range.start / DAY_MINUTES) * 100}%` }}
                 aria-label="调整开始时间"
                 onPointerDown={(event) => startDrag(event, 'start')}
                 onPointerMove={(event) => {
-                  if (draggingEdgeRef.current === 'start' && event.currentTarget.hasPointerCapture(event.pointerId)) {
+                  if (
+                    draggingEdgeRef.current === 'start' &&
+                    event.currentTarget.hasPointerCapture(event.pointerId)
+                  ) {
                     updateTimeFromPointer(event, 'start')
                   }
                 }}
@@ -678,12 +836,15 @@ function TalkFrequencyTimelineRule({
               />
               <button
                 type="button"
-                className="absolute top-1/2 h-7 w-2 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-sm border border-background bg-foreground/80"
+                className="border-background bg-foreground/80 absolute top-1/2 h-7 w-2 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-sm border"
                 style={{ left: `${((range.end + 1) / DAY_MINUTES) * 100}%` }}
                 aria-label="调整结束时间"
                 onPointerDown={(event) => startDrag(event, 'end')}
                 onPointerMove={(event) => {
-                  if (draggingEdgeRef.current === 'end' && event.currentTarget.hasPointerCapture(event.pointerId)) {
+                  if (
+                    draggingEdgeRef.current === 'end' &&
+                    event.currentTarget.hasPointerCapture(event.pointerId)
+                  ) {
                     updateTimeFromPointer(event, 'end')
                   }
                 }}
@@ -695,7 +856,7 @@ function TalkFrequencyTimelineRule({
             </>
           )}
         </div>
-        <div className="relative mt-1 h-4 text-[11px] text-muted-foreground">
+        <div className="text-muted-foreground relative mt-1 h-4 text-[11px]">
           {range ? (
             <>
               <span
@@ -742,7 +903,7 @@ function TalkFrequencyTimelineRule({
             type="button"
             variant="ghost"
             size="icon"
-            className="h-8 w-8 text-destructive hover:text-destructive"
+            className="text-destructive hover:text-destructive h-8 w-8"
             disabled={deleteMutation.isPending}
             aria-label={`删除时间段 ${rule.time || '默认'} 的发言频率规则`}
             onClick={() => deleteMutation.mutate()}
@@ -764,23 +925,19 @@ function TalkFrequencyTimelineEditor({
 }) {
   return (
     <div className="space-y-2">
-      <div className="hidden grid-cols-[minmax(12rem,1fr)_8rem_8rem] gap-3 px-3 text-[11px] text-muted-foreground xl:grid">
+      <div className="text-muted-foreground hidden grid-cols-[minmax(12rem,1fr)_8rem_8rem] gap-3 px-3 text-[11px] xl:grid">
         <div>时间轴</div>
         <div>频率</div>
         <div className="text-right">操作</div>
       </div>
       {exactRules.length === 0 ? (
-        <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+        <div className="text-muted-foreground rounded-md border border-dashed px-3 py-2 text-sm">
           当前聊天流还没有专属发言频率规则。
         </div>
       ) : (
         <div className="space-y-2">
           {exactRules.map((rule, index) => (
-            <TalkFrequencyTimelineRule
-              key={`${rule.time}:${index}`}
-              detail={detail}
-              rule={rule}
-            />
+            <TalkFrequencyTimelineRule key={`${rule.time}:${index}`} detail={detail} rule={rule} />
           ))}
         </div>
       )}
@@ -800,15 +957,16 @@ function TalkFrequencyEditor({ detail }: { detail: ChatStreamDetail }) {
   const [mode, setMode] = useState<TalkFrequencyEditMode>('timeline')
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+    <div className="bg-muted/10 space-y-3 rounded-md border p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-sm font-medium">当前聊天流规则</div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            仅编辑 {detail.platform}:{detail.target_id}:{getChatTypeText(detail.chat_type)} 的精确规则。
+          <div className="text-muted-foreground mt-1 text-xs">
+            仅编辑 {detail.platform}:{detail.target_id}:{getChatTypeText(detail.chat_type)}{' '}
+            的精确规则。
           </div>
         </div>
-        <div className="inline-flex shrink-0 rounded-md border bg-background p-1">
+        <div className="bg-background inline-flex shrink-0 rounded-md border p-1">
           <Button
             type="button"
             size="sm"
@@ -835,7 +993,7 @@ function TalkFrequencyEditor({ detail }: { detail: ChatStreamDetail }) {
       ) : (
         <div className="space-y-3">
           {exactRules.length === 0 ? (
-            <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+            <div className="text-muted-foreground rounded-md border border-dashed px-3 py-2 text-sm">
               当前聊天流还没有专属发言频率规则。
             </div>
           ) : (
@@ -871,12 +1029,19 @@ function TalkFrequencySection({ detail }: { detail: ChatStreamDetail }) {
       </div>
       <div className="grid gap-2 text-sm sm:grid-cols-3">
         <FrequencySummaryItem label="默认频率" value={detail.talk_frequency.base_value_label} />
-        <FrequencySummaryItem label="当前生效" value={detail.talk_frequency.effective_value_label} />
-        <FrequencySummaryItem formatValue={false} label="当前时间" value={detail.talk_frequency.current_time} />
+        <FrequencySummaryItem
+          label="当前生效"
+          value={detail.talk_frequency.effective_value_label}
+        />
+        <FrequencySummaryItem
+          formatValue={false}
+          label="当前时间"
+          value={detail.talk_frequency.current_time}
+        />
       </div>
       <div className="space-y-2">
         {detail.talk_frequency.matched_rules.length === 0 ? (
-          <div className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+          <div className="bg-muted text-muted-foreground rounded-md px-3 py-2 text-sm">
             没有可应用的动态发言频率规则，使用默认频率。
           </div>
         ) : (
@@ -893,22 +1058,589 @@ function TalkFrequencySection({ detail }: { detail: ChatStreamDetail }) {
   )
 }
 
+function PromptTextBlock({
+  content,
+  emptyText,
+  title,
+}: {
+  content: string
+  emptyText: string
+  title: string
+}) {
+  const normalizedContent = content.trim()
+  return (
+    <div className="space-y-2">
+      <div className="text-sm font-medium">{title}</div>
+      {normalizedContent ? (
+        <pre className="bg-muted/25 text-foreground max-h-40 overflow-auto rounded-md border p-3 text-xs leading-5 break-words whitespace-pre-wrap">
+          {normalizedContent}
+        </pre>
+      ) : (
+        <div className="text-muted-foreground rounded-md border border-dashed px-3 py-2 text-sm">
+          {emptyText}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PromptRuleEditor({
+  detail,
+  prompt,
+}: {
+  detail: ChatStreamDetail
+  prompt: ChatPromptRule
+}) {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const [draft, setDraft] = useState(prompt.prompt)
+  const saveMutation = useMutation({
+    mutationFn: () => upsertChatStreamPrompt(detail.session_id, { prompt: draft }, prompt.index),
+    onSuccess: (nextDetail) => {
+      queryClient.setQueryData(['chat-stream-detail', detail.session_id], nextDetail)
+      toast({ title: '聊天 Prompt 已保存' })
+    },
+    onError: (error) => {
+      toast({
+        title: '聊天 Prompt 保存失败',
+        description: error instanceof Error ? error.message : '请稍后重试',
+        variant: 'destructive',
+      })
+    },
+  })
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteChatStreamPrompt(detail.session_id, prompt.index),
+    onSuccess: (nextDetail) => {
+      queryClient.setQueryData(['chat-stream-detail', detail.session_id], nextDetail)
+      toast({ title: '聊天 Prompt 已删除' })
+    },
+    onError: (error) => {
+      toast({
+        title: '聊天 Prompt 删除失败',
+        description: error instanceof Error ? error.message : '请稍后重试',
+        variant: 'destructive',
+      })
+    },
+  })
+  const isBusy = saveMutation.isPending || deleteMutation.isPending
+  const normalizedDraft = draft.trim()
+  const changed = normalizedDraft !== prompt.prompt.trim()
+
+  useEffect(() => {
+    setDraft(prompt.prompt)
+  }, [prompt.prompt])
+
+  return (
+    <div className="bg-muted/20 space-y-2 rounded-md border p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-muted-foreground min-w-0 text-xs">
+          专属目标：
+          <span className="font-mono break-all">
+            {prompt.platform}:{prompt.item_id}:{prompt.rule_type}
+          </span>
+        </div>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          disabled={isBusy}
+          aria-label="删除聊天 Prompt"
+          onClick={() => deleteMutation.mutate()}
+        >
+          <Trash2 className="text-destructive h-4 w-4" />
+        </Button>
+      </div>
+      <Textarea
+        value={draft}
+        disabled={isBusy}
+        onChange={(event) => setDraft(event.target.value)}
+        className="min-h-24 text-xs leading-5"
+      />
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          size="sm"
+          disabled={!changed || !normalizedDraft || isBusy}
+          onClick={() => saveMutation.mutate()}
+        >
+          <Save className="mr-2 h-3.5 w-3.5" />
+          保存
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function NewPromptEditor({ detail }: { detail: ChatStreamDetail }) {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const [draft, setDraft] = useState('')
+  const saveMutation = useMutation({
+    mutationFn: () => upsertChatStreamPrompt(detail.session_id, { prompt: draft }),
+    onSuccess: (nextDetail) => {
+      setDraft('')
+      queryClient.setQueryData(['chat-stream-detail', detail.session_id], nextDetail)
+      toast({ title: '聊天 Prompt 已新增' })
+    },
+    onError: (error) => {
+      toast({
+        title: '聊天 Prompt 新增失败',
+        description: error instanceof Error ? error.message : '请稍后重试',
+        variant: 'destructive',
+      })
+    },
+  })
+  const normalizedDraft = draft.trim()
+
+  return (
+    <div className="space-y-2 rounded-md border border-dashed p-3">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <Edit3 className="h-4 w-4" />
+        新增当前聊天流专属 Prompt
+      </div>
+      <Textarea
+        value={draft}
+        disabled={saveMutation.isPending}
+        onChange={(event) => setDraft(event.target.value)}
+        placeholder="只写这个聊天流额外需要遵守的发言要求。"
+        className="min-h-24 text-xs leading-5"
+      />
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          size="sm"
+          disabled={!normalizedDraft || saveMutation.isPending}
+          onClick={() => saveMutation.mutate()}
+        >
+          <Plus className="mr-2 h-3.5 w-3.5" />
+          新增
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function ChatPromptSection({ detail }: { detail: ChatStreamDetail }) {
+  return (
+    <section className="space-y-3 rounded-md border p-3">
+      <div className="font-medium">聊天 Prompt</div>
+      <PromptTextBlock
+        title={detail.prompts.base_prompt_title}
+        content={detail.prompts.base_prompt}
+        emptyText="当前基础 Prompt 为空。"
+      />
+      <div className="space-y-2">
+        <div className="text-sm font-medium">额外聊天流 Prompt</div>
+        {detail.prompts.chat_prompts.length === 0 ? (
+          <div className="text-muted-foreground rounded-md border border-dashed px-3 py-2 text-sm">
+            当前聊天流没有专属额外 Prompt。
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {detail.prompts.chat_prompts.map((prompt, index) => (
+              <PromptRuleEditor key={`${prompt.index}:${index}`} detail={detail} prompt={prompt} />
+            ))}
+          </div>
+        )}
+      </div>
+      <NewPromptEditor detail={detail} />
+    </section>
+  )
+}
+
+function MutualGroupsView({ chats }: { chats: ChatStream[] }) {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const [kind, setKind] = useState<MutualGroupKind>(() => {
+    if (typeof window === 'undefined') {
+      return 'expression'
+    }
+    const queryKind = new URLSearchParams(window.location.search).get('kind')
+    return queryKind === 'memory' || queryKind === 'jargon' ? queryKind : 'expression'
+  })
+  const [addDialogGroupIndex, setAddDialogGroupIndex] = useState<number | null>(null)
+  const [addDialogSearch, setAddDialogSearch] = useState('')
+  const [selectedTargetKeys, setSelectedTargetKeys] = useState<string[]>([])
+  const configQuery = useQuery({
+    queryKey: ['chat-management-mutual-groups-config'],
+    queryFn: () => getBotConfig(),
+  })
+  const sectionName = kind === 'memory' ? 'a_memorix' : kind
+  const groupFieldName =
+    kind === 'memory'
+      ? 'shared_memory_groups'
+      : kind === 'expression'
+        ? 'expression_groups'
+        : 'jargon_groups'
+  const sectionData = (configQuery.data?.[sectionName] && typeof configQuery.data[sectionName] === 'object'
+    ? configQuery.data[sectionName]
+    : {}) as Record<string, unknown>
+  const globalMemorySharingEnabled =
+    kind === 'memory' && sectionData.global_memory_sharing_enabled === true
+  const groups = useMemo(
+    () => normalizeMutualGroups(sectionData[groupFieldName]),
+    [groupFieldName, sectionData]
+  )
+  const addDialogGroup = addDialogGroupIndex === null ? null : (groups[addDialogGroupIndex] ?? null)
+  const selectedTargetKeySet = useMemo(() => new Set(selectedTargetKeys), [selectedTargetKeys])
+  const addDialogExistingKeySet = useMemo(
+    () => new Set((addDialogGroup?.targets ?? []).map(targetKey)),
+    [addDialogGroup]
+  )
+  const chatNameByTargetKey = useMemo(
+    () => new Map(chats.map((chat) => [targetKey(chatToTarget(chat)), chat.display_name])),
+    [chats]
+  )
+  const addDialogChats = useMemo(() => {
+    const keyword = addDialogSearch.trim().toLowerCase()
+    return chats.filter((chat) => {
+      const target = chatToTarget(chat)
+      if (addDialogExistingKeySet.has(targetKey(target))) {
+        return false
+      }
+      if (!keyword) {
+        return true
+      }
+      return [
+        chat.display_name,
+        chat.platform,
+        getChatLogicalId(chat),
+        chat.user_id,
+        chat.group_id,
+        chat.session_id,
+        getChatTypeText(chat.chat_type),
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(keyword)
+    })
+  }, [addDialogExistingKeySet, addDialogSearch, chats])
+  const visibleAddDialogChats = addDialogChats.slice(0, MUTUAL_GROUP_CHAT_RESULT_LIMIT)
+  const isAddDialogLimited = addDialogChats.length > visibleAddDialogChats.length
+
+  const saveMutation = useMutation({
+    mutationFn: (nextSectionData: Record<string, unknown>) =>
+      updateBotConfigSection(sectionName, nextSectionData),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['chat-management-mutual-groups-config'] })
+      toast({
+        title: '共享组已保存',
+        description: `${MUTUAL_GROUP_KIND_LABEL[kind]}共享组配置已更新。`,
+      })
+    },
+    onError: (error) => {
+      toast({
+        title: '保存共享组失败',
+        description: error instanceof Error ? error.message : '请稍后重试',
+        variant: 'destructive',
+      })
+    },
+  })
+
+  const updateGroups = (nextGroups: ChatStreamGroupConfig[]) => {
+    if (globalMemorySharingEnabled) {
+      return
+    }
+    saveMutation.mutate({
+      ...sectionData,
+      [groupFieldName]: serializeMutualGroups(nextGroups),
+    })
+  }
+
+  const createGroup = () => {
+    if (globalMemorySharingEnabled) {
+      return
+    }
+    updateGroups([...groups, { targets: [] }])
+  }
+
+  const openAddDialog = (groupIndex: number) => {
+    if (globalMemorySharingEnabled) {
+      return
+    }
+    setAddDialogGroupIndex(groupIndex)
+    setAddDialogSearch('')
+    setSelectedTargetKeys([])
+  }
+
+  const closeAddDialog = () => {
+    setAddDialogGroupIndex(null)
+    setAddDialogSearch('')
+    setSelectedTargetKeys([])
+  }
+
+  const toggleAddDialogChat = (target: TargetItem) => {
+    const key = targetKey(target)
+    setSelectedTargetKeys((currentKeys) =>
+      currentKeys.includes(key)
+        ? currentKeys.filter((currentKey) => currentKey !== key)
+        : [...currentKeys, key]
+    )
+  }
+
+  const applySelectedChatsToGroup = () => {
+    if (globalMemorySharingEnabled || addDialogGroupIndex === null || selectedTargetKeys.length === 0) {
+      return
+    }
+    const selectedKeySet = new Set(selectedTargetKeys)
+    const selectedTargets = chats
+      .map(chatToTarget)
+      .filter((target) => selectedKeySet.has(targetKey(target)))
+    const nextGroups = groups.map((group, index) => {
+      if (index !== addDialogGroupIndex) {
+        return group
+      }
+      const targets = group.targets ?? []
+      const existingKeys = new Set(targets.map(targetKey))
+      const nextTargets = selectedTargets.filter((target) => !existingKeys.has(targetKey(target)))
+      return { targets: [...targets, ...nextTargets] }
+    })
+    updateGroups(nextGroups)
+    closeAddDialog()
+  }
+
+  const removeTarget = (groupIndex: number, targetIndex: number) => {
+    if (globalMemorySharingEnabled) {
+      return
+    }
+    updateGroups(
+      groups.map((group, index) =>
+        index === groupIndex
+          ? {
+              targets: (group.targets ?? []).filter(
+                (_, memberIndex) => memberIndex !== targetIndex
+              ),
+            }
+          : group
+      )
+    )
+  }
+
+  const deleteGroup = (groupIndex: number) => {
+    if (globalMemorySharingEnabled) {
+      return
+    }
+    updateGroups(groups.filter((_, index) => index !== groupIndex))
+  }
+  const editingDisabled = saveMutation.isPending || globalMemorySharingEnabled
+
+  return (
+    <section className="bg-background flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border">
+      <div className="flex shrink-0 flex-col gap-3 border-b p-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold">共享组管理</h2>
+          <p className="text-sm text-muted-foreground">
+            管理表达、黑话和记忆的聊天流共享组。
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="bg-background inline-flex rounded-md border p-1">
+            {[
+              ['expression', '表达'],
+              ['jargon', '黑话'],
+              ['memory', '记忆'],
+            ].map(([value, label]) => (
+              <Button
+                key={value}
+                type="button"
+                variant={kind === value ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8"
+                onClick={() => setKind(value as MutualGroupKind)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+          <Button type="button" disabled={editingDisabled} onClick={createGroup}>
+            <Plus className="mr-2 h-4 w-4" />
+            新建共享组
+          </Button>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        {globalMemorySharingEnabled && (
+          <div className="mb-3 rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+            全局共享记忆已开启，记忆共享组暂不参与普通记忆检索范围控制。
+          </div>
+        )}
+        {configQuery.isLoading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-20" />
+            <Skeleton className="h-20" />
+          </div>
+        ) : configQuery.error ? (
+          <div className="border-destructive/40 text-destructive rounded-md border p-4 text-sm">
+            加载共享组失败
+          </div>
+        ) : groups.length === 0 ? (
+          <div className="text-muted-foreground rounded-md border border-dashed p-6 text-center text-sm">
+            暂无{MUTUAL_GROUP_KIND_LABEL[kind]}共享组。
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            {groups.map((group, groupIndex) => (
+              <div key={groupIndex} className="rounded-md border p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="font-medium">共享组 {groupIndex + 1}</div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={editingDisabled}
+                      onClick={() => openAddDialog(groupIndex)}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      添加聊天
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="text-destructive hover:text-destructive"
+                      disabled={editingDisabled}
+                      aria-label={`删除共享组 ${groupIndex + 1}`}
+                      onClick={() => deleteGroup(groupIndex)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {(group.targets ?? []).length === 0 ? (
+                    <span className="text-muted-foreground text-sm">空共享组</span>
+                  ) : (
+                    (group.targets ?? []).map((target, targetIndex) => (
+                      <Badge
+                        key={`${targetKey(target)}:${targetIndex}`}
+                        variant="outline"
+                        className="gap-2"
+                        title={targetLabel(target)}
+                      >
+                        <span className="max-w-48 truncate text-xs">
+                          {getTargetDisplayName(target, chatNameByTargetKey)}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-muted-foreground hover:text-destructive"
+                          disabled={editingDisabled}
+                          aria-label={`移除 ${getTargetDisplayName(target, chatNameByTargetKey)}`}
+                          onClick={() => removeTarget(groupIndex, targetIndex)}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <Dialog
+        open={addDialogGroupIndex !== null}
+        onOpenChange={(open) => !open && closeAddDialog()}
+      >
+        <DialogContent style={{ '--dialog-width': '42rem' } as CSSProperties}>
+          <DialogHeader>
+            <DialogTitle>添加聊天</DialogTitle>
+            <DialogDescription>
+              选择要加入共享组 {addDialogGroupIndex === null ? '' : addDialogGroupIndex + 1}{' '}
+              的聊天流。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            <div className="space-y-3">
+              <Input
+                value={addDialogSearch}
+                onChange={(event) => setAddDialogSearch(event.target.value)}
+                placeholder="搜索名称、平台、用户、群号或会话 ID"
+              />
+              <div className="max-h-[22rem] overflow-auto rounded-md border">
+                {addDialogChats.length === 0 ? (
+                  <div className="text-muted-foreground p-4 text-center text-sm">
+                    没有可加入的聊天流
+                  </div>
+                ) : (
+                  <div className="divide-y">
+                    {visibleAddDialogChats.map((chat) => {
+                      const target = chatToTarget(chat)
+                      const key = targetKey(target)
+                      const checked = selectedTargetKeySet.has(key)
+                      return (
+                        <label
+                          key={chat.session_id}
+                          className="hover:bg-muted/60 flex cursor-pointer items-center gap-3 px-3 py-2"
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={() => toggleAddDialogChat(target)}
+                            aria-label={`选择 ${chat.display_name}`}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-medium">{chat.display_name}</div>
+                            <div className="text-muted-foreground truncate font-mono text-xs">
+                              {chat.platform}:{getChatLogicalId(chat)}
+                            </div>
+                          </div>
+                          <Badge variant="outline">{getChatTypeText(chat.chat_type)}</Badge>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+              {isAddDialogLimited && (
+                <div className="text-xs text-muted-foreground">
+                  仅显示前 {MUTUAL_GROUP_CHAT_RESULT_LIMIT} 个匹配项，请输入关键词缩小范围。
+                </div>
+              )}
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeAddDialog}>
+              取消
+            </Button>
+            <Button
+              type="button"
+              disabled={selectedTargetKeys.length === 0 || editingDisabled}
+              onClick={applySelectedChatsToGroup}
+            >
+              加入 {selectedTargetKeys.length} 个聊天
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </section>
+  )
+}
+
 function ConfigStatusRows({ detail }: { detail: ChatStreamDetail }) {
   const configRows = [
-    { title: '表达', status: detail.expression, visible: true },
-    { title: '黑话', status: detail.jargon, visible: true },
+    { kind: 'expression' as const, title: '表达', status: detail.expression },
+    { kind: 'jargon' as const, title: '黑话', status: detail.jargon },
     {
+      kind: 'behavior' as const,
       title: '行为',
       status: detail.behavior,
-      visible: Boolean(detail.behavior && (detail.behavior.use || detail.behavior.learn)),
     },
   ]
 
   return (
     <section className="space-y-2">
       {configRows.map((row) =>
-        row.visible && row.status ? (
-          <ConfigStatusRow key={row.title} title={row.title} status={row.status} />
+        row.status ? (
+          <ConfigStatusRow
+            key={row.kind}
+            detail={detail}
+            kind={row.kind}
+            title={row.title}
+            status={row.status}
+          />
         ) : null
       )}
     </section>
@@ -918,8 +1650,8 @@ function ConfigStatusRows({ detail }: { detail: ChatStreamDetail }) {
 function CompactDetailItem({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="min-w-0 space-y-1">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="min-w-0 break-all text-sm font-medium">{value}</div>
+      <div className="text-muted-foreground text-xs">{label}</div>
+      <div className="min-w-0 text-sm font-medium break-all">{value}</div>
     </div>
   )
 }
@@ -944,7 +1676,11 @@ function ChatDetailContent({
   }
 
   if (error || !detail) {
-    return <div className="rounded-md border border-destructive/40 p-4 text-sm text-destructive">加载详情失败</div>
+    return (
+      <div className="border-destructive/40 text-destructive rounded-md border p-4 text-sm">
+        加载详情失败
+      </div>
+    )
   }
 
   return (
@@ -957,11 +1693,15 @@ function ChatDetailContent({
         <div className="grid gap-3 sm:grid-cols-3">
           <CompactDetailItem label="Platform" value={detail.platform || '-'} />
           <CompactDetailItem label="Type" value={getChatTypeText(detail.chat_type)} />
-          <CompactDetailItem label="ID" value={<span className="font-mono">{detail.target_id || '-'}</span>} />
+          <CompactDetailItem
+            label="ID"
+            value={<span className="font-mono">{detail.target_id || '-'}</span>}
+          />
         </div>
       </section>
 
       <TalkFrequencySection detail={detail} />
+      <ChatPromptSection detail={detail} />
       <ConfigStatusRows detail={detail} />
     </div>
   )
@@ -1003,7 +1743,10 @@ function DeleteChatStreamDialog({
   })
   const isDeleting = deleteMutation.isPending
   const canDelete =
-    Boolean(chat?.session_id) && confirmText.trim() === chat?.session_id && !isDeleting && !deleteResult
+    Boolean(chat?.session_id) &&
+    confirmText.trim() === chat?.session_id &&
+    !isDeleting &&
+    !deleteResult
 
   useEffect(() => {
     if (!chat) {
@@ -1059,7 +1802,7 @@ function DeleteChatStreamDialog({
     <Dialog open={chat !== null} onOpenChange={(open) => !isDeleting && onOpenChange(open)}>
       <DialogContent style={{ '--dialog-width': '38rem' } as CSSProperties}>
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-destructive">
+          <DialogTitle className="text-destructive flex items-center gap-2">
             <AlertTriangle className="h-5 w-5" />
             严肃确认：删除聊天流
           </DialogTitle>
@@ -1069,9 +1812,9 @@ function DeleteChatStreamDialog({
         </DialogHeader>
         <DialogBody>
           <div className="space-y-4">
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
-              <div className="font-medium text-destructive">将被清理的数据包括：</div>
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+            <div className="border-destructive/40 bg-destructive/10 rounded-md border p-3 text-sm">
+              <div className="text-destructive font-medium">将被清理的数据包括：</div>
+              <ul className="text-muted-foreground mt-2 list-disc space-y-1 pl-5">
                 <li>聊天流记录和该 session_id 下的所有消息。</li>
                 <li>表达学习、黑话关联、工具调用记录、行为学习记录。</li>
                 <li>消息统计、高频词等以该聊天流为归属的数据。</li>
@@ -1079,16 +1822,14 @@ function DeleteChatStreamDialog({
             </div>
 
             <div className="grid gap-2 text-sm">
-              <div className="grid gap-1 rounded-md border bg-muted/30 p-3">
+              <div className="bg-muted/30 grid gap-1 rounded-md border p-3">
                 <span className="text-muted-foreground">聊天流</span>
                 <span className="font-medium">{chat?.display_name || '-'}</span>
-                <span className="break-all font-mono text-xs text-muted-foreground">
+                <span className="text-muted-foreground font-mono text-xs break-all">
                   {chat?.session_id || '-'}
                 </span>
               </div>
-              <Label htmlFor="delete-chat-session-confirm">
-                请输入完整 session_id 以确认删除
-              </Label>
+              <Label htmlFor="delete-chat-session-confirm">请输入完整 session_id 以确认删除</Label>
               <Input
                 id="delete-chat-session-confirm"
                 value={confirmText}
@@ -1103,13 +1844,13 @@ function DeleteChatStreamDialog({
               <div className="space-y-2 rounded-md border p-3">
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="font-medium">{stage}</span>
-                  <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                  <span className="text-muted-foreground font-mono text-xs tabular-nums">
                     {progress}%
                   </span>
                 </div>
                 <Progress value={progress} className="h-2" />
                 {deleteResult && (
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-muted-foreground text-xs">
                     {formatDeleteSummary(deleteResult)}
                   </p>
                 )}
@@ -1131,6 +1872,12 @@ function DeleteChatStreamDialog({
 }
 
 export function ChatManagementPage() {
+  const [activeView, setActiveView] = useState<ChatManagementView>(() => {
+    if (typeof window === 'undefined') {
+      return 'streams'
+    }
+    return new URLSearchParams(window.location.search).get('view') === 'groups' ? 'groups' : 'streams'
+  })
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<ChatTypeFilter>('all')
   const [page, setPage] = useState(1)
@@ -1153,7 +1900,8 @@ export function ChatManagementPage() {
   })
 
   const filteredChats = useMemo(
-    () => chats.filter((chat) => matchesTypeFilter(chat, typeFilter) && matchesSearch(chat, search)),
+    () =>
+      chats.filter((chat) => matchesTypeFilter(chat, typeFilter) && matchesSearch(chat, search)),
     [chats, search, typeFilter]
   )
   const pageCount = Math.max(1, Math.ceil(filteredChats.length / PAGE_SIZE))
@@ -1186,201 +1934,227 @@ export function ChatManagementPage() {
   }
 
   return (
-    <main className="flex h-full min-h-0 flex-col gap-5 overflow-hidden p-4 md:p-6">
-      <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div className="grid grid-cols-3 gap-3 text-sm">
-          <div className="rounded-md border bg-background px-3 py-2">
+    <main className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-4 md:p-6">
+      <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="bg-background grid w-full grid-cols-3 border-2 text-sm sm:w-auto">
+          <div className="px-4 py-2">
             <div className="text-muted-foreground">全部</div>
-            <div className="mt-1 text-lg font-semibold">{chats.length}</div>
+            <div className="text-lg leading-tight font-semibold">{chats.length}</div>
           </div>
-          <div className="rounded-md border bg-background px-3 py-2">
+          <div className="border-l-2 px-4 py-2">
             <div className="text-muted-foreground">群聊</div>
-            <div className="mt-1 text-lg font-semibold">{groupCount}</div>
+            <div className="text-lg leading-tight font-semibold">{groupCount}</div>
           </div>
-          <div className="rounded-md border bg-background px-3 py-2">
+          <div className="border-l-2 px-4 py-2">
             <div className="text-muted-foreground">私聊</div>
-            <div className="mt-1 text-lg font-semibold">{privateCount}</div>
+            <div className="text-lg leading-tight font-semibold">{privateCount}</div>
           </div>
         </div>
+        <Tabs
+          value={activeView}
+          onValueChange={(value) => setActiveView(value as ChatManagementView)}
+        >
+          <DashboardTabBar className="bg-background h-10 w-full border-2 sm:w-fit">
+            <DashboardTabTrigger value="streams" className="h-8 px-4">
+              聊天流
+            </DashboardTabTrigger>
+            <DashboardTabTrigger value="groups" className="h-8 px-4">
+              共享组
+            </DashboardTabTrigger>
+          </DashboardTabBar>
+        </Tabs>
       </header>
 
-      <section className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative w-full sm:max-w-sm">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="搜索名称、平台、用户、群号或会话 ID"
-            className="pl-9"
-          />
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <div className="inline-flex rounded-md border bg-background p-1">
-            {[
-              ['all', '全部'],
-              ['group', '群聊'],
-              ['private', '私聊'],
-            ].map(([value, label]) => (
-              <Button
-                key={value}
-                type="button"
-                variant={typeFilter === value ? 'secondary' : 'ghost'}
-                size="sm"
-                className="h-8"
-                onClick={() => setTypeFilter(value as ChatTypeFilter)}
+      {activeView === 'groups' ? (
+        <MutualGroupsView chats={chats} />
+      ) : (
+        <>
+          <section className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="relative w-full sm:max-w-sm">
+              <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="搜索名称、平台、用户、群号或会话 ID"
+                className="pl-9"
+              />
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Tabs
+                value={typeFilter}
+                onValueChange={(value) => setTypeFilter(value as ChatTypeFilter)}
               >
-                {label}
+                <DashboardTabBar className="bg-background h-10 w-full border-2 sm:w-fit">
+                  <DashboardTabTrigger value="all" className="h-8 px-4">
+                    全部
+                  </DashboardTabTrigger>
+                  <DashboardTabTrigger value="group" className="h-8 px-4">
+                    群聊
+                  </DashboardTabTrigger>
+                  <DashboardTabTrigger value="private" className="h-8 px-4">
+                    私聊
+                  </DashboardTabTrigger>
+                </DashboardTabBar>
+              </Tabs>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void refetch()}
+                disabled={isFetching}
+                className="shrink-0"
+              >
+                <RefreshCw className={cn('mr-2 h-4 w-4', isFetching && 'animate-spin')} />
+                刷新
               </Button>
-            ))}
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void refetch()}
-            disabled={isFetching}
-            className="shrink-0"
-          >
-            <RefreshCw className={cn('mr-2 h-4 w-4', isFetching && 'animate-spin')} />
-            刷新
-          </Button>
-        </div>
-      </section>
+            </div>
+          </section>
 
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border bg-background">
-        <div className="min-h-0 flex-1 overflow-auto">
-          <Table className="table-fixed">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[7rem] px-3">聊天流</TableHead>
-                <TableHead className="w-[2rem] px-2">平台</TableHead>
-                <TableHead className="w-[5rem] px-2">ID</TableHead>
-                <TableHead className="w-[2.5rem] px-2">Type</TableHead>
-                <TableHead className="w-[3rem] px-2 text-right">消息数</TableHead>
-                <TableHead className="w-[3rem] px-2 text-right">表达数</TableHead>
-                <TableHead className="w-[3rem] px-2 text-right">黑话数</TableHead>
-                <TableHead className="w-[3rem] px-2">最后活跃</TableHead>
-                <TableHead className="w-[4rem] px-2 text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="h-28 text-center text-muted-foreground">
-                    正在加载聊天流...
-                  </TableCell>
-                </TableRow>
-              ) : error ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="h-28 text-center text-destructive">
-                    加载聊天流失败
-                  </TableCell>
-                </TableRow>
-              ) : filteredChats.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="h-28 text-center text-muted-foreground">
-                    暂无匹配的聊天流
-                  </TableCell>
-                </TableRow>
-              ) : (
-                paginatedChats.map((chat) => (
-                  <TableRow key={chat.session_id}>
-                    <TableCell className="px-3">
-                      <div className="flex min-w-0 items-center gap-3">
-                        <ChatStreamAvatar chat={chat} />
-                        <div className="min-w-0">
-                          <HoverScrollText className="font-medium" maxChars={12} value={chat.display_name} />
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="px-2 font-mono text-xs text-muted-foreground">
-                      <HoverScrollText maxChars={4} value={chat.platform} />
-                    </TableCell>
-                    <TableCell className="px-2 font-mono text-xs text-muted-foreground">
-                      <HoverScrollText maxChars={12} value={getChatLogicalId(chat)} />
-                    </TableCell>
-                    <TableCell className="px-2">
-                      <Badge variant="outline">{getChatTypeLabel(chat)}</Badge>
-                    </TableCell>
-                    <TableCell className="px-2 text-right tabular-nums">{chat.message_count}</TableCell>
-                    <TableCell className="px-2 text-right tabular-nums">{chat.expression_count}</TableCell>
-                    <TableCell className="px-2 text-right tabular-nums">{chat.jargon_count}</TableCell>
-                    <TableCell className="px-2 text-muted-foreground">
-                      {formatTimestamp(chat.last_active_at)}
-                    </TableCell>
-                    <TableCell className="px-2 text-right">
-                      <div className="flex justify-end">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`查看 ${chat.display_name} 详情`}
-                          onClick={() => setSelectedChat(chat)}
-                        >
-                          <Info className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
+          <section className="bg-background flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border">
+            <div className="min-h-0 flex-1 overflow-auto">
+              <Table className="table-fixed">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[7rem] px-3">聊天流</TableHead>
+                    <TableHead className="w-[2rem] px-2">平台</TableHead>
+                    <TableHead className="w-[5rem] px-2">ID</TableHead>
+                    <TableHead className="w-[2.5rem] px-2">Type</TableHead>
+                    <TableHead className="w-[3rem] px-2 text-right">消息数</TableHead>
+                    <TableHead className="w-[3rem] px-2 text-right">表达数</TableHead>
+                    <TableHead className="w-[3rem] px-2 text-right">黑话数</TableHead>
+                    <TableHead className="w-[3rem] px-2">最后活跃</TableHead>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-        <div className="flex shrink-0 flex-col gap-3 border-t px-4 py-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            显示 {visibleStart}-{visibleEnd} / {filteredChats.length} 个聊天流
-          </div>
-          <div className="flex max-w-full min-w-0 items-center gap-1 overflow-x-auto pb-1 sm:justify-end">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0"
-              disabled={currentPage <= 1}
-              aria-label="第一页"
-              onClick={() => setPage(1)}
-            >
-              <ChevronsLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0"
-              disabled={currentPage <= 1}
-              aria-label="上一页"
-              onClick={() => setPage((value) => Math.max(1, value - 1))}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <span className="min-w-20 shrink-0 px-2 text-center tabular-nums">
-              {currentPage} / {pageCount}
-            </span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0"
-              disabled={currentPage >= pageCount}
-              aria-label="下一页"
-              onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0"
-              disabled={currentPage >= pageCount}
-              aria-label="最后一页"
-              onClick={() => setPage(pageCount)}
-            >
-              <ChevronsRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </section>
+                </TableHeader>
+                <TableBody>
+                  {isLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-muted-foreground h-28 text-center">
+                        正在加载聊天流...
+                      </TableCell>
+                    </TableRow>
+                  ) : error ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-destructive h-28 text-center">
+                        加载聊天流失败
+                      </TableCell>
+                    </TableRow>
+                  ) : filteredChats.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-muted-foreground h-28 text-center">
+                        暂无匹配的聊天流
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    paginatedChats.map((chat) => (
+                      <TableRow
+                        key={chat.session_id}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`查看 ${chat.display_name} 详情`}
+                        className="cursor-pointer hover:bg-primary/10 focus-visible:bg-primary/10 focus-visible:outline-primary/60 focus-visible:outline-2 focus-visible:outline-offset-[-2px]"
+                        onClick={() => setSelectedChat(chat)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            setSelectedChat(chat)
+                          }
+                        }}
+                      >
+                        <TableCell className="px-3">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <ChatStreamAvatar chat={chat} />
+                            <div className="min-w-0">
+                              <HoverScrollText
+                                className="font-medium"
+                                maxChars={12}
+                                value={chat.display_name}
+                              />
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground px-2 font-mono text-xs">
+                          <HoverScrollText maxChars={4} value={chat.platform} />
+                        </TableCell>
+                        <TableCell className="text-muted-foreground px-2 font-mono text-xs">
+                          <HoverScrollText maxChars={12} value={getChatLogicalId(chat)} />
+                        </TableCell>
+                        <TableCell className="px-2">
+                          <Badge variant="outline">{getChatTypeLabel(chat)}</Badge>
+                        </TableCell>
+                        <TableCell className="px-2 text-right tabular-nums">
+                          {chat.message_count}
+                        </TableCell>
+                        <TableCell className="px-2 text-right tabular-nums">
+                          {chat.expression_count}
+                        </TableCell>
+                        <TableCell className="px-2 text-right tabular-nums">
+                          {chat.jargon_count}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground px-2">
+                          {formatTimestamp(chat.last_active_at)}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="text-muted-foreground flex shrink-0 flex-col gap-2 border-t px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                显示 {visibleStart}-{visibleEnd} / {filteredChats.length} 个聊天流
+              </div>
+              <div className="flex max-w-full min-w-0 items-center gap-1 overflow-x-auto sm:justify-end">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  disabled={currentPage <= 1}
+                  aria-label="第一页"
+                  onClick={() => setPage(1)}
+                >
+                  <ChevronsLeft className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  disabled={currentPage <= 1}
+                  aria-label="上一页"
+                  onClick={() => setPage((value) => Math.max(1, value - 1))}
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+                <span className="min-w-16 shrink-0 px-1 text-center tabular-nums">
+                  {currentPage} / {pageCount}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  disabled={currentPage >= pageCount}
+                  aria-label="下一页"
+                  onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  disabled={currentPage >= pageCount}
+                  aria-label="最后一页"
+                  onClick={() => setPage(pageCount)}
+                >
+                  <ChevronsRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          </section>
+        </>
+      )}
 
       <Dialog open={selectedChat !== null} onOpenChange={(open) => !open && setSelectedChat(null)}>
         <DialogContent style={{ '--dialog-width': '44rem' } as CSSProperties}>

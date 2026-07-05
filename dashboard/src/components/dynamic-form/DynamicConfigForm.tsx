@@ -61,14 +61,6 @@ function orderInlineFields(schema: ConfigSchema, fields: FieldSchema[]) {
     .map(({ field }) => field)
 }
 
-function countSectionItems(schema: ConfigSchema) {
-  return schema.fields.length + Object.keys(schema.nested ?? {}).length
-}
-
-function shouldShowSectionCollapse(sectionKey: string, schema: ConfigSchema) {
-  return sectionKey === 'a_memorix' && countSectionItems(schema) > 1
-}
-
 const CHAT_TALK_RULE_FIELD_NAMES = new Set(['enable_talk_value_rules', 'talk_value_rules'])
 
 export function AdvancedSettingsButton({
@@ -454,6 +446,12 @@ export const DynamicConfigForm: React.FC<DynamicConfigFormProps> = ({
     return rows
   }
 
+  const horizontalSeparatorClassName =
+    "md:border-l md:border-border/50 md:pl-3 " +
+    "md:[&:nth-child(2n+1)]:border-l-0 md:[&:nth-child(2n+1)]:pl-0 " +
+    "xl:[&:nth-child(2n+1)]:border-l xl:[&:nth-child(2n+1)]:border-border/50 xl:[&:nth-child(2n+1)]:pl-3 " +
+    "xl:[&:nth-child(3n+1)]:border-l-0 xl:[&:nth-child(3n+1)]:pl-0"
+
   const renderRows = (rows: FieldSchema[][]) => (
     <>
       {rows.map((row) => {
@@ -465,14 +463,24 @@ export const DynamicConfigForm: React.FC<DynamicConfigFormProps> = ({
               key={row.map((field) => field.name).join('|')}
               data-config-row={rowKey}
               className={cn(
-                "grid min-w-0 gap-3 py-0.5",
+                "grid min-w-0 items-stretch gap-3 py-0.5",
                 isVisualImageCompressionRow
                   ? "grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.1fr)] items-center"
-                  : "md:grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))]",
+                  : "md:grid-cols-2 xl:grid-cols-3",
               )}
             >
-              {row.map((field) => (
-                <div key={field.name} className="min-w-0">{renderField(field)}</div>
+              {row.map((field, fieldIndex) => (
+                <div
+                  key={field.name}
+                  className={cn(
+                    "flex min-w-0 items-stretch",
+                    isVisualImageCompressionRow
+                      ? fieldIndex > 0 && "md:border-l md:border-border/50 md:pl-3"
+                      : horizontalSeparatorClassName,
+                  )}
+                >
+                  <div className="min-w-0 flex-1">{renderField(field)}</div>
+                </div>
               ))}
             </div>
           ) : (
@@ -494,7 +502,7 @@ export const DynamicConfigForm: React.FC<DynamicConfigFormProps> = ({
   )
 
   const renderVisibleFields = () => {
-    if (basePath !== 'chat') {
+    if (basePath !== 'chat.reply_timing') {
       return renderFieldList(visibleFields)
     }
 
@@ -509,13 +517,10 @@ export const DynamicConfigForm: React.FC<DynamicConfigFormProps> = ({
     }
 
     return (
-      <div className="grid min-w-0 items-start gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div className="min-w-0">
-          {renderFieldList(commonFields)}
-        </div>
-        <div className="min-w-0">
-          {renderFieldList(talkRuleFields)}
-        </div>
+      <div className="min-w-0 space-y-4">
+        {renderFieldList(commonFields)}
+        <Separator className="my-2 bg-border/50" />
+        {renderFieldList(talkRuleFields)}
       </div>
     )
   }
@@ -629,7 +634,7 @@ export const DynamicConfigForm: React.FC<DynamicConfigFormProps> = ({
                 key={key}
                 advancedVisible={resolvedAdvancedVisible}
                 collapsedByDefault={Boolean(nestedField?.['x-collapsed-by-default'])}
-                collapsible={shouldShowSectionCollapse(key, nestedSchema)}
+                collapsible={false}
                 nestedSchema={nestedSchema}
                 values={(values[key] as Record<string, unknown>) || {}}
                 onChange={onChange}

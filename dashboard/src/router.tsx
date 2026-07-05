@@ -62,20 +62,18 @@ const indexRoute = createRoute({
   component: lazyRouteComponent(() => import('./routes/index'), 'IndexPage'),
 })
 
+// 沉浸专注陪伴路由
+const focusCompanionRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: '/focus',
+  component: lazyRouteComponent(() => import('./routes/focus'), 'FocusCompanionPage'),
+})
+
 // 配置路由 - 麦麦主程序配置
 const botConfigRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: '/config/bot',
   component: lazyRouteComponent(() => import('./routes/config/bot'), 'BotConfigPage'),
-})
-
-// 配置路由 - 旧模型厂商配置入口，已合并到模型配置页
-const modelProviderConfigRoute = createRoute({
-  getParentRoute: () => protectedRoute,
-  path: '/config/modelProvider',
-  beforeLoad: () => {
-    throw redirect({ to: '/config/model' })
-  },
 })
 
 // 配置路由 - 麦麦模型配置
@@ -85,7 +83,7 @@ const modelConfigRoute = createRoute({
   component: lazyRouteComponent(() => import('./routes/config/model'), 'ModelConfigPage'),
 })
 
-// 配置路由 - 麦麦适配器配置（已停用，引导跳转到插件配置；旧实现保留在 ./routes/config/adapter）
+// 配置路由 - Prompt 管理
 const promptManagementRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: '/config/prompts',
@@ -97,12 +95,6 @@ const promptGeneratorRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: '/config/prompt-generator',
   component: lazyRouteComponent(() => import('./routes/prompt-generator'), 'PromptGeneratorPage'),
-})
-
-const adapterConfigRoute = createRoute({
-  getParentRoute: () => protectedRoute,
-  path: '/config/adapter',
-  component: lazyRouteComponent(() => import('./routes/config/adapter-disabled'), 'AdapterConfigPage'),
 })
 
 // 资源管理路由 - 表情包管理
@@ -210,6 +202,13 @@ const chatEmbedRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/chat/embed',
   component: lazyRouteComponent(() => import('./routes/chat/embed'), 'ChatEmbedPage'),
+})
+
+// 外部程序嵌入用专注陪伴路由，不挂载 dashboard 顶栏和侧边栏
+const focusCompanionEmbedRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/focus/embed',
+  component: lazyRouteComponent(() => import('./routes/focus'), 'FocusCompanionPage'),
 })
 
 // 外部程序嵌入用插件市场路由，不挂载 dashboard 顶栏和侧边栏
@@ -332,17 +331,17 @@ const routeTree = rootRoute.addChildren([
   authRoute,
   setupRoute,
   chatEmbedRoute,
+  focusCompanionEmbedRoute,
   pluginsEmbedRoute,
   pluginConfigEmbedRoute,
   pluginMirrorsEmbedRoute,
   protectedRoute.addChildren([
     indexRoute,
+    focusCompanionRoute,
     botConfigRoute,
-    modelProviderConfigRoute,
     modelConfigRoute,
     promptManagementRoute,
     promptGeneratorRoute,
-    adapterConfigRoute,
     emojiManagementRoute,
     expressionManagementRoute,
     jargonManagementRoute,

@@ -186,13 +186,20 @@ class AMemorixHostService:
             from .core.runtime.sdk_memory_kernel import KernelSearchRequest
 
             chat_id = str(payload.get("chat_id", "") or "").strip()
+            config = self._read_config()
+            global_memory_sharing_enabled = bool(config.get("global_memory_sharing_enabled", False))
+            search_chat_id = "" if global_memory_sharing_enabled else chat_id
+            shared_chat_ids = ()
+            if not global_memory_sharing_enabled:
+                shared_chat_ids = tuple(AMemorixConfigUtils.get_shared_memory_session_ids(chat_id))
+
             return await kernel.search_memory(
                 KernelSearchRequest(
                     query=str(payload.get("query", "") or ""),
                     limit=int(payload.get("limit", 5) or 5),
                     mode=str(payload.get("mode", "search") or "search"),
-                    chat_id=chat_id,
-                    shared_chat_ids=tuple(AMemorixConfigUtils.get_shared_memory_session_ids(chat_id)),
+                    chat_id=search_chat_id,
+                    shared_chat_ids=shared_chat_ids,
                     person_id=str(payload.get("person_id", "") or ""),
                     time_start=payload.get("time_start"),
                     time_end=payload.get("time_end"),
@@ -268,22 +275,24 @@ class AMemorixHostService:
         if component_name == "memory_stats":
             return kernel.memory_stats()
 
-        admin_actions = {
-            "memory_graph_admin": kernel.memory_graph_admin,
-            "memory_source_admin": kernel.memory_source_admin,
-            "memory_episode_admin": kernel.memory_episode_admin,
-            "memory_profile_admin": kernel.memory_profile_admin,
-            "memory_feedback_admin": kernel.memory_feedback_admin,
-            "memory_runtime_admin": kernel.memory_runtime_admin,
-            "memory_import_admin": kernel.memory_import_admin,
-            "memory_tuning_admin": kernel.memory_tuning_admin,
-            "memory_v5_admin": kernel.memory_v5_admin,
-            "memory_delete_admin": kernel.memory_delete_admin,
+        admin_action_names = {
+            "memory_graph_admin",
+            "memory_source_admin",
+            "memory_episode_admin",
+            "memory_profile_admin",
+            "memory_feedback_admin",
+            "memory_runtime_admin",
+            "memory_import_admin",
+            "memory_tuning_admin",
+            "memory_v5_admin",
+            "memory_delete_admin",
+            "memory_correction_admin",
+            "memory_fuzzy_modify_admin",
         }
-        if component_name in admin_actions:
+        if component_name in admin_action_names:
             kwargs = dict(payload)
             action = str(kwargs.pop("action", "") or "")
-            return await admin_actions[component_name](action=action, **kwargs)
+            return await getattr(kernel, component_name)(action=action, **kwargs)
 
         raise RuntimeError(f"不支持的 A_Memorix 调用: {component_name}")
 
