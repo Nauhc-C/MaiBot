@@ -33,6 +33,7 @@ from .official_configs import (
     EmojiConfig,
     ExperimentalConfig,
     ExpressionConfig,
+    FeaturesConfig,
     JargonConfig,
     KeywordReactionConfig,
     LogConfig,
@@ -149,6 +150,9 @@ class Config(ConfigBase):
 
     plugin_runtime: PluginRuntimeConfig = Field(default_factory=PluginRuntimeConfig)
     """插件运行时配置类"""
+
+    features: FeaturesConfig = Field(default_factory=FeaturesConfig)
+    """功能特性配置类"""
 
 
 class ModelConfig(ConfigBase):

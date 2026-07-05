@@ -5161,4 +5161,84 @@ class PluginRuntimeConfig(ConfigBase):
             },
         },
     )
+
+
+class SeiyuuRecognitionConfig(ConfigBase):
+    """SeiyuuMatch 人脸识别配置类"""
+
+    __ui_label__ = "声优识别"
+
+    enabled: bool = Field(
+        default=True,
+        json_schema_extra={
+            "label": {
+                "zh_CN": "启用识别",
+                "en_US": "Enable recognition",
+                "ja_JP": "認識を有効にする",
+            },
+            "x-widget": "switch",
+            "x-icon": "eye",
+        },
+    )
+    """是否启用 SeiyuuMatch 人脸识别，用于修正 VLM 对声优/角色的识别错误。"""
+
+    api_endpoint: str = Field(
+        default="https://seiyuumatch.org",
+        json_schema_extra={
+            "label": {
+                "zh_CN": "API 地址",
+                "en_US": "API endpoint",
+                "ja_JP": "API エンドポイント",
+            },
+            "x-widget": "input",
+            "x-icon": "link",
+        },
+    )
+    """SeiyuuMatch API 地址。"""
+
+    timeout: float = Field(
+        default=10.0,
+        json_schema_extra={
+            "label": {
+                "zh_CN": "超时时间(秒)",
+                "en_US": "Timeout (seconds)",
+                "ja_JP": "タイムアウト(秒)",
+            },
+            "x-widget": "number",
+            "x-icon": "clock",
+        },
+    )
+    """API 请求超时时间（秒）。"""
+
+    selected_groups: str = Field(
+        default="bangdream:mygo,bangdream:avemujica,bangdream:sumimi",
+        json_schema_extra={
+            "label": {
+                "zh_CN": "识别范围",
+                "en_US": "Selected groups",
+                "ja_JP": "認識範囲",
+            },
+            "x-widget": "input",
+            "x-icon": "users",
+        },
+    )
+    """默认识别范围，多个用逗号分隔。"""
+
+
+class FeaturesConfig(ConfigBase):
+    """功能特性配置类"""
+
+    __ui_label__ = "功能特性"
+
+    seiyuu_recognition: SeiyuuRecognitionConfig = Field(
+        default_factory=SeiyuuRecognitionConfig,
+        json_schema_extra={
+            "label": {
+                "zh_CN": "声优识别",
+                "en_US": "Seiyuu recognition",
+                "ja_JP": "声優認識",
+            },
+        },
+    )
+    """SeiyuuMatch 人脸识别配置"""
     """插件需要网页截图或渲染时使用的浏览器配置。"""

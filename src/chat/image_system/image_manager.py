@@ -455,8 +455,20 @@ class ImageManager:
             logger.info(f"Cleaned mistaken registration state on {fixed_counter} image records")
 
     async def _generate_image_description(self, image_bytes: bytes, image_format: str) -> str:
+        from src.chat.image_system.seiyuu_recognizer import seiyuu_recognizer
+
+        # 先尝试用 SeiyuuMatch 识别人脸
+        seiyuu_recognition = await seiyuu_recognizer.recognize(image_bytes)
+
         prompt_template = prompt_manager.get_prompt("image_description")
         prompt = await prompt_manager.render_prompt(prompt_template)
+
+        # 如果识别到声优，将结果注入到 prompt 中作为先验信息
+        if seiyuu_recognition:
+            seiyuu_info = seiyuu_recognizer.format_recognition_for_prompt(seiyuu_recognition)
+            prompt = f"{seiyuu_info}\n\n{prompt}"
+            logger.info(f"已将 SeiyuuMatch 识别结果注入到图片描述 prompt: {seiyuu_info}")
+
         image_base64 = base64.b64encode(image_bytes).decode("utf-8")
 
         generation_result = await vlm.generate_response_for_image(

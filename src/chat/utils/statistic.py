@@ -464,13 +464,12 @@ class StatisticOutputTask(AsyncTask):
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 logger.info("正在收集统计数据...")
 
+                # 串行执行数据库操作以避免 SQLite 多线程并发问题
+                # 先刷新统计聚合表，再收集统计数据
                 await loop.run_in_executor(executor, refresh_statistics_aggregates)
 
                 # 数据收集任务
-                collect_task = loop.run_in_executor(executor, self._collect_all_statistics, now)
-
-                # 等待数据收集完成
-                stats = await collect_task
+                stats = await loop.run_in_executor(executor, self._collect_all_statistics, now)
                 try:
                     await refresh_dashboard_statistics_cache()
                 except Exception as e:
