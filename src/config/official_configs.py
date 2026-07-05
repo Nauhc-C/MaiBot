@@ -4381,6 +4381,25 @@ class ResponseSplitterConfig(ConfigBase):
     )
     """单条回复允许的最大长度。"""
 
+    disable_too_long_fallback: bool = Field(
+        default=False,
+        json_schema_extra={
+            "label": {
+                "zh_CN": "禁用过长回复兜底",
+                "en_US": "Disable too-long fallback",
+                "ja_JP": "長すぎる返信のフォールバックを無効化",
+            },
+            "x-widget": "switch",
+            "x-icon": "ban",
+            "description": {
+                "zh_CN": "当回复过长时，禁用"不知道哦"等默认回复，直接返回原始回复（可能会被截断）",
+                "en_US": "When reply is too long, disable default fallback replies and return original (may be truncated)",
+                "ja_JP": "返信が長すぎる場合、デフォルトのフォールバック返信を無効にして元の返信を返す（切り捨てられる可能性あり）",
+            },
+        },
+    )
+    """禁用过长回复时的默认兜底回复，直接返回原始回复。"""
+
     max_sentence_num: int = Field(
         default=8,
         json_schema_extra={

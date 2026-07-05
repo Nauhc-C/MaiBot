@@ -542,8 +542,12 @@ def process_llm_response(text: str, enable_splitter: bool = True, enable_chinese
     max_split_num = global_config.response_splitter.max_split_num
     # 如果基本上是中文，则进行长度过滤
     if get_western_ratio(cleaned_text) < 0.1 and len(cleaned_text) > max_length:
-        logger.warning(f"回复过长 ({len(cleaned_text)} 字符)，返回默认回复")
-        return [_get_random_default_reply()]
+        if global_config.response_splitter.disable_too_long_fallback:
+            logger.warning(f"回复过长 ({len(cleaned_text)} 字符)，已禁用默认兜底，继续处理原始回复")
+            # 不返回默认回复，继续处理
+        else:
+            logger.warning(f"回复过长 ({len(cleaned_text)} 字符)，返回默认回复")
+            return [_get_random_default_reply()]
 
     typo_generator = ChineseTypoGenerator(
         error_rate=global_config.chinese_typo.error_rate,
