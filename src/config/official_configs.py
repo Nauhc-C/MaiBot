@@ -4392,7 +4392,7 @@ class ResponseSplitterConfig(ConfigBase):
             "x-widget": "switch",
             "x-icon": "ban",
             "description": {
-                "zh_CN": "当回复过长时，禁用"不知道哦"等默认回复，直接返回原始回复（可能会被截断）",
+                "zh_CN": "当回复过长时，禁用\"不知道哦\"等默认回复，直接返回原始回复（可能会被截断）",
                 "en_US": "When reply is too long, disable default fallback replies and return original (may be truncated)",
                 "ja_JP": "返信が長すぎる場合、デフォルトのフォールバック返信を無効にして元の返信を返す（切り捨てられる可能性あり）",
             },
