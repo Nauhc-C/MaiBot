@@ -89,6 +89,10 @@ class ReplyNecessityTurnGate:
             pending_messages=pending_messages,
             trigger_threshold=trigger_threshold,
         )
+
+        # 将必要性评分存储到 runtime，供插件使用
+        self._runtime._last_necessity_score = score
+
         decision = "trigger" if score >= REPLY_NECESSITY_TRIGGER_SCORE else "wait"
         decision_label = "进入Planner" if decision == "trigger" else "等待更多消息"
         gate_detail = f"必要性: {detail} 评分阈值={REPLY_NECESSITY_TRIGGER_SCORE} 判定={decision_label}"

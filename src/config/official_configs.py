@@ -5958,7 +5958,7 @@ class SeiyuuRecognitionConfig(ConfigBase):
     """API 请求超时时间（秒）。"""
 
     selected_groups: str = Field(
-        default="bangdream:mygo,bangdream:avemujica,bangdream:sumimi",
+        default="bangdream:mygo,bangdream:avemujica,bangdream:roselia",
         json_schema_extra={
             "label": {
                 "zh_CN": "识别范围",
@@ -5970,6 +5970,34 @@ class SeiyuuRecognitionConfig(ConfigBase):
         },
     )
     """默认识别范围，多个用逗号分隔。"""
+
+    enable_fallback: bool = Field(
+        default=True,
+        json_schema_extra={
+            "label": {
+                "zh_CN": "启用三级回退",
+                "en_US": "Enable fallback",
+                "ja_JP": "フォールバックを有効にする",
+            },
+            "x-widget": "switch",
+            "x-icon": "refresh-cw",
+        },
+    )
+    """置信度不足时，是否自动扩大识别范围重试（三级回退：3团→5团→全BanGDream）。"""
+
+    fallback_threshold: float = Field(
+        default=60.0,
+        json_schema_extra={
+            "label": {
+                "zh_CN": "回退阈值(%)",
+                "en_US": "Fallback threshold (%)",
+                "ja_JP": "フォールバック閾値(%)",
+            },
+            "x-widget": "number",
+            "x-icon": "percent",
+        },
+    )
+    """触发回退的置信度阈值，低于此值时扩大识别范围（建议 50-70）。"""
 
 
 class FeaturesConfig(ConfigBase):

@@ -918,16 +918,3 @@ keywords = [
 context = "啤酒罐是祥子父亲丰川清告颓废生活的强烈象征。约一年前祥子在赤羽看到满地酒罐和混乱房间，意识到父亲已经崩溃；几个月前武道馆当天，父亲情绪爆发并扔啤酒罐，也让祥子说出自己无家可回。"
 inject_to_planner = true
 inject_to_replyer = true
-
-[[rules]]
-enabled = true
-name = "Sakiko当前活动"
-keywords = [
-    "在干什么",
-    "在做什么",
-    "现在在",
-    "今天",
-]
-context = ""
-inject_to_planner = true
-inject_to_replyer = true

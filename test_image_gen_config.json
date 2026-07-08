@@ -1,0 +1,16 @@
+{
+  "api": {
+    "base_url": "https://starport.openainotopen.com/v1",
+    "api_key": "REDACTED_USE_ENV",
+    "timeout": 60
+  },
+  "reference_paths": {
+    "scene_dir": "D:/Sakiko/assets/场景",
+    "character_dir": "D:/Sakiko/assets/立绘/小祥"
+  },
+  "test_prompts": [
+    "一个可爱的动漫女孩在樱花树下，春天，阳光明媚，高质量插画",
+    "夕阳下的海边，温暖的色调，唯美插画风格",
+    "咖啡厅内景，温馨氛围，柔和光线，精致插画"
+  ]
+}

@@ -464,10 +464,26 @@ class ImageManager:
         prompt = await prompt_manager.render_prompt(prompt_template)
 
         # 如果识别到声优，将结果注入到 prompt 中作为先验信息
+        seiyuu_info = ""
+        uncertainty_note = ""  # 用于传递给 Planner 的不确定性提示
         if seiyuu_recognition:
             seiyuu_info = seiyuu_recognizer.format_recognition_for_prompt(seiyuu_recognition)
             prompt = f"{seiyuu_info}\n\n{prompt}"
-            logger.info(f"已将 SeiyuuMatch 识别结果注入到图片描述 prompt: {seiyuu_info}")
+            logger.info(f"已将 SeiyuuMatch 识别结果注入到图片描述 prompt")
+
+            # 详细记录完整的注入内容（用于调试）
+            logger.debug(f"SeiyuuMatch 注入内容:\n{seiyuu_info}")
+            logger.debug(f"完整 VLM prompt (前200字):\n{prompt[:200]}...")
+
+            # 检查置信度，如果较低，准备传递不确定性信息给 Planner
+            details = seiyuu_recognition.get("details", [])
+            if details:
+                avg_score = sum(d.get("display_score", 0) for d in details) / len(details)
+                if avg_score < 70:
+                    # 构建简短的不确定性提示
+                    names = [d.get("name", "未知") for d in details]
+                    uncertainty_note = f"（人脸识别置信度 {int(avg_score)}%，可能是 {'/'.join(names)}）"
+                    logger.info(f"识别置信度较低 ({avg_score}%)，将在图片描述中添加不确定性提示")
 
         image_base64 = base64.b64encode(image_bytes).decode("utf-8")
 
@@ -479,6 +495,16 @@ class ImageManager:
         description = generation_result.response
         if not description:
             logger.warning("VLM未能生成图片描述")
+
+        # 记录 VLM 生成的描述（用于调试）
+        if description and seiyuu_recognition:
+            logger.debug(f"VLM 生成的描述 (前150字):\n{description[:150]}...")
+
+        # 如果有不确定性提示，附加到描述末尾传递给 Planner
+        if description and uncertainty_note:
+            description = f"{description}{uncertainty_note}"
+            logger.debug(f"已在图片描述中添加不确定性提示: {uncertainty_note}")
+
         return description or ""
 
 

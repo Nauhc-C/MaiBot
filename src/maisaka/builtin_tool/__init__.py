@@ -31,6 +31,8 @@ from .view_forward_message import get_tool_spec as get_view_forward_message_tool
 from .view_forward_message import handle_tool as handle_view_forward_message_tool
 from .wait import get_tool_spec as get_wait_tool_spec
 from .wait import handle_tool as handle_wait_tool
+from .generate_image import get_tool_spec as get_generate_image_tool_spec
+from .generate_image import handle_tool as handle_generate_image_tool
 
 BuiltinToolHandler = Callable[[ToolInvocation, Optional[ToolExecutionContext]], Awaitable[ToolExecutionResult]]
 BuiltinToolRawHandler = Callable[
@@ -95,6 +97,7 @@ BUILTIN_TOOL_ENTRIES: List[BuiltinToolEntry] = [
     ),
     BuiltinToolEntry("send_emoji", get_send_emoji_tool_spec, handle_send_emoji_tool, stage="action"),
     BuiltinToolEntry("send_image", get_send_image_tool_spec, handle_send_image_tool, stage="action"),
+    BuiltinToolEntry("generate_image", get_generate_image_tool_spec, handle_generate_image_tool, stage="action"),
     BuiltinToolEntry("tool_search", get_tool_search_tool_spec, handle_tool_search_tool, stage="action"),
     BuiltinToolEntry(
         "fetch_history",
