@@ -596,6 +596,26 @@ class MaisakaReasoningEngine:
         """处理 Planner 未调用工具时的终止策略。"""
 
         planner_no_tool_count += 1
+
+        # 第一次没有调用工具时，添加提示并继续
+        if planner_no_tool_count == 1:
+            hint_message = ReferenceMessage(
+                content=(
+                    "你没有调用任何工具。\n"
+                    "如果你想回复消息，请使用 reply 工具；\n"
+                    "如果你想继续观察或等待，请使用 wait 或 no_action 工具。"
+                ),
+                timestamp=datetime.now(),
+                reference_type=ReferenceMessageType.PLANNER_TOOL_HINT,
+                remaining_uses_value=1,
+                display_prefix="[Planner 提示]",
+            )
+            self._runtime._chat_history.append(hint_message)
+            logger.info(f"{self._runtime.log_prefix} Planner 未调用工具，已添加提示消息，继续下一轮")
+            cycle_end = CycleEnd("planner_no_tool_retry", "Planner 未调用工具，已添加提示继续。")
+            return planner_no_tool_count, cycle_end, False
+
+        # 多次不调用工具，才真正结束
         cycle_end = CycleEnd("planner_no_tool_end", "Planner本轮思考结束。")
         self._end_planner_no_tool_cycle(
             planner_extra_lines,
