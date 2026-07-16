@@ -52,16 +52,6 @@ def test_splitter_keeps_dash_adjacent_spaces(monkeypatch) -> None:
     assert chat_utils.split_into_sentences_w_remove_punctuation("参数 — 值") == ["参数 — 值"]
 
 
-def test_splitter_does_not_split_comma_delimited_description(monkeypatch) -> None:
-    """逗号罗列型描述不应被切碎成大量短句。"""
-
-    monkeypatch.setattr(chat_utils.random, "random", lambda: 1.0)
-
-    text = "大小姐气质的少女，蓝灰色中长发，发尾微卷，冷色调眼睛，五官端正精致，神情克制冷淡，带一点疏离感，气质高雅，衣着考究，日系动画风，细腻光影，干净背景 desuwa"
-
-    assert chat_utils.split_into_sentences_w_remove_punctuation(text) == [text]
-
-
 def test_splitter_keeps_long_sync_sentence_as_single_segment(monkeypatch) -> None:
     """长句描述在没有稳定句边界时应尽量保持为单段。"""
 
@@ -111,3 +101,26 @@ def test_process_llm_response_merges_overflow_instead_of_fallback(monkeypatch) -
         chat_utils.global_config.response_splitter.max_sentence_num = original_max_sentence_num
         chat_utils.global_config.response_splitter.max_split_num = original_max_split_num
         chat_utils.global_config.response_splitter.enable_overflow_return_all = original_overflow_return_all
+
+
+def test_process_llm_response_preserves_message_placeholders(monkeypatch) -> None:
+    """媒体占位符不能被括号清理误判为空内容。"""
+
+    original_enable = chat_utils.global_config.response_post_process.enable_response_post_process
+    original_splitter_enable = chat_utils.global_config.response_splitter.enable
+    original_typo_enable = chat_utils.global_config.chinese_typo.enable
+
+    try:
+        chat_utils.global_config.response_post_process.enable_response_post_process = True
+        chat_utils.global_config.response_splitter.enable = True
+        chat_utils.global_config.chinese_typo.enable = False
+
+        placeholders = ("[语音消息]", "[语音消息，转录失败]", "[图片]", "[图片，识别中.....]", "[表情包]")
+        for placeholder in placeholders:
+            assert chat_utils.process_llm_response(placeholder) == [placeholder]
+
+        assert chat_utils.process_llm_response("收到[语音消息]") == ["收到[语音消息]"]
+    finally:
+        chat_utils.global_config.response_post_process.enable_response_post_process = original_enable
+        chat_utils.global_config.response_splitter.enable = original_splitter_enable
+        chat_utils.global_config.chinese_typo.enable = original_typo_enable

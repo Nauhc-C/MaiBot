@@ -23,6 +23,10 @@ if TYPE_CHECKING:
 
 logger = get_logger("chat_utils")
 _warned_unconfigured_platforms: set[str] = set()
+# 聊天上下文中的媒体占位符不是括号说明，不能被回复后处理清除。
+_MESSAGE_PLACEHOLDER_PATTERN = re.compile(
+    r"\[(?:图片|表情包|表情|语音(?:消息)?)(?:[\s，,:：][^\]\r\n]*)?\]"
+)
 
 
 def is_english_letter(char: str) -> bool:
@@ -330,7 +334,7 @@ def split_into_sentences_w_remove_punctuation(text: str) -> list[str]:
             inside_quote[idx] = in_quote
 
     # 定义分隔符（包含换行符）
-    separators = {"，", ",", " ", "。", ";", "\n"}
+    separators = {" ", "。", ";", "\n"}
     segments = []
     current_segment = ""
 
@@ -507,11 +511,30 @@ def _get_random_default_reply() -> str:
         f"{global_config.bot.nickname}不知道",
         "不知道哦",
         "不知道",
-        "不晓得",
-        "懒得说",
         "()",
     ]
     return random.choice(default_replies)
+
+
+def _protect_message_placeholders(text: str) -> tuple[str, dict[str, str]]:
+    """临时保护聊天消息中的媒体占位符，避免被括号清理规则误删。"""
+
+    placeholder_mapping: dict[str, str] = {}
+
+    def replace_placeholder(match: re.Match[str]) -> str:
+        token = f"__MESSAGE_PLACEHOLDER_{len(placeholder_mapping)}__"
+        placeholder_mapping[token] = match.group(0)
+        return token
+
+    return _MESSAGE_PLACEHOLDER_PATTERN.sub(replace_placeholder, text), placeholder_mapping
+
+
+def _restore_message_placeholders(text: str, placeholder_mapping: dict[str, str]) -> str:
+    """恢复回复后处理前保护的媒体占位符。"""
+
+    for token, placeholder in placeholder_mapping.items():
+        text = text.replace(token, placeholder)
+    return text
 
 
 def process_llm_response(text: str, enable_splitter: bool = True, enable_chinese_typo: bool = True) -> list[str]:
@@ -525,6 +548,8 @@ def process_llm_response(text: str, enable_splitter: bool = True, enable_chinese
     else:
         protected_text = text
         kaomoji_mapping = {}
+
+    protected_text, message_placeholder_mapping = _protect_message_placeholders(protected_text)
     # 提取被 () 或 [] 或 （）包裹且包含中文的内容
     pattern = re.compile(r"[(\[（](?=.*[一-鿿]).*?[)\]）]")
     _extracted_contents = pattern.findall(protected_text)  # 在保护后的文本上查找
@@ -583,8 +608,7 @@ def process_llm_response(text: str, enable_splitter: bool = True, enable_chinese
             logger.warning(f"分割后消息数量过多 ({len(sentences)} 条)，直接返回原文")
             sentences = [cleaned_text]
         else:
-            logger.warning(f"分割后消息数量过多 ({len(sentences)} 条)，返回默认回复")
-            return [_get_random_default_reply()]
+            logger.warning(f"分割后消息数量过多 ({len(sentences)} 条)，自动合并为最多 {max_split_num} 条")
 
     sentences = merge_sentences_to_max_count(sentences, max_split_num)
 
@@ -595,6 +619,13 @@ def process_llm_response(text: str, enable_splitter: bool = True, enable_chinese
     # 在所有句子处理完毕后，对包含占位符的列表进行恢复
     if global_config.response_splitter.enable_kaomoji_protection:
         sentences = recover_kaomoji(sentences, kaomoji_mapping)
+    sentences = [_restore_message_placeholders(sentence, message_placeholder_mapping) for sentence in sentences]
+
+    # === TTS空文本调试：输出最终分句结果 ===
+    logger.warning(f"[TTS调试] process_llm_response 输出 {len(sentences)} 个句子:")
+    for i, s in enumerate(sentences, 1):
+        logger.warning(f"  句子[{i}] {s!r} | 长度:{len(s)} | 包含\\n:{chr(10) in s}")
+    # === 调试结束 ===
 
     return sentences
 
