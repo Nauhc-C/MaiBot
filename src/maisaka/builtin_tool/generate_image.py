@@ -1,10 +1,10 @@
 """图片生成内置工具。"""
 
-import asyncio
-import base64
-import json
-import urllib.request
+from os import getenv
 from typing import Any, Optional
+import base64
+
+import httpx
 
 from src.common.logger import get_logger
 from src.core.tooling import ToolExecutionContext, ToolExecutionResult, ToolInvocation, ToolSpec
@@ -46,185 +46,79 @@ def get_tool_spec() -> ToolSpec:
 
 
 class ImageGenerator:
-    """图像生成器，使用 right.codes gpt-image-2 API（异步模式）"""
+    """独立生图服务客户端。"""
 
-    def __init__(self):
-        # 使用 right.codes API
-        self.base_url = "https://www.right.codes/draw"
-        self.api_key = "REDACTED_USE_ENV"
-        self.model = "gpt-image-2"
-        self.timeout = 120  # 任务查询超时
-        self.poll_interval = 2  # 轮询间隔（秒）
+    def __init__(
+        self,
+        base_url: str | None = None,
+        service_token: str | None = None,
+        timeout: float | None = None,
+        client: httpx.AsyncClient | None = None,
+    ):
+        self.base_url = (
+            base_url or getenv("IMAGE_GENERATION_SERVICE_URL", "http://127.0.0.1:8091")
+        ).rstrip("/")
+        self.service_token = (
+            service_token if service_token is not None else getenv("IMAGE_GENERATION_SERVICE_TOKEN", "").strip()
+        )
+        self.timeout = (
+            timeout
+            if timeout is not None
+            else float(getenv("IMAGE_GENERATION_SERVICE_TIMEOUT_SECONDS", "150"))
+        )
+        self._client = client
 
-    async def generate(self, prompt: str) -> bytes | None:
-        """生成图像
+    async def generate(self, prompt: str, style_hint: str = "") -> bytes:
+        """调用独立服务生成图片并返回二进制数据。"""
 
-        Args:
-            prompt: 图像描述提示词
-
-        Returns:
-            图像二进制数据，失败返回 None
-        """
-        try:
-            # 步骤1: 提交生图任务
-            task_id = await asyncio.to_thread(self._submit_task, prompt)
-            if not task_id:
-                logger.error("提交生图任务失败")
-                return None
-
-            logger.info(f"生图任务已提交，task_id: {task_id}")
-
-            # 步骤2: 轮询任务状态
-            image_url = await self._poll_task_result(task_id)
-            if not image_url:
-                logger.error("获取生图结果失败")
-                return None
-
-            logger.info(f"生图完成，图片 URL: {image_url}")
-
-            # 步骤3: 下载图片
-            image_data = await asyncio.to_thread(self._download_image, image_url)
-            return image_data
-
-        except Exception as e:
-            logger.error(f"图像生成失败: {e}", exc_info=True)
-            return None
-
-    def _submit_task(self, prompt: str) -> str | None:
-        """提交生图任务
-
-        Returns:
-            task_id 或 None
-        """
-        url = f"{self.base_url}/v1/images/generations"
-        body = {
-            "model": self.model,
+        headers: dict[str, str] = {}
+        if self.service_token:
+            headers["Authorization"] = f"Bearer {self.service_token}"
+        request_body = {
             "prompt": prompt,
-            "n": 1,
+            "style_hint": style_hint,
             "size": "1:1",
-            "async": True,  # 异步模式
         }
-        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
 
-        request = urllib.request.Request(
-            url=url,
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            },
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                response_body = response.read()
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore")
-            logger.error(f"提交任务失败 HTTP {exc.code}: {detail}")
-            return None
-
-        data = json.loads(response_body.decode("utf-8"))
-        return data.get("task_id")
-
-    async def _poll_task_result(self, task_id: str) -> str | None:
-        """轮询任务结果
-
-        Returns:
-            图片 URL 或 None
-        """
-        start_time = asyncio.get_event_loop().time()
-
-        while True:
-            # 检查超时
-            if asyncio.get_event_loop().time() - start_time > self.timeout:
-                logger.error(f"任务 {task_id} 查询超时")
-                return None
-
-            # 查询任务状态
-            result = await asyncio.to_thread(self._query_task, task_id)
-
-            if result is None:
-                # 查询失败
-                return None
-
-            status = result.get("status", "")
-
-            if status == "failed":
-                error_msg = result.get("error", {}).get("message", "未知错误")
-                logger.error(f"任务 {task_id} 失败: {error_msg}")
-                return None
-
-            if status in ["queued", "in_progress"]:
-                # 任务进行中，继续轮询
-                progress = result.get("progress", 0)
-                logger.debug(f"任务 {task_id} 进度: {progress}%")
-                await asyncio.sleep(self.poll_interval)
-                continue
-
-            # 任务完成，提取图片 URL
-            if "data" in result:
-                # Images 格式
-                data_list = result.get("data", [])
-                if data_list and len(data_list) > 0:
-                    return data_list[0].get("url")
-            elif "candidates" in result:
-                # Gemini 格式
-                candidates = result.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        text = parts[0].get("text", "")
-                        if text.startswith("http"):
-                            return text
-
-            logger.error(f"任务 {task_id} 响应格式异常: {result}")
-            return None
-
-    def _query_task(self, task_id: str) -> dict[str, Any] | None:
-        """查询任务状态
-
-        Returns:
-            任务状态字典或 None
-        """
-        url = f"https://www.right.codes/v1/tasks/{task_id}"
-
-        request = urllib.request.Request(
-            url=url,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            },
-            method="GET",
-        )
+        if self._client is not None:
+            response = await self._client.post(
+                f"{self.base_url}/v1/images/generations",
+                headers=headers,
+                json=request_body,
+                timeout=self.timeout,
+            )
+        else:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/v1/images/generations",
+                    headers=headers,
+                    json=request_body,
+                )
 
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                response_body = response.read()
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore")
-            logger.error(f"查询任务失败 HTTP {exc.code}: {detail}")
-            return None
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            try:
+                error_payload = response.json()
+            except ValueError:
+                detail = response.text
+            else:
+                detail = (
+                    str(error_payload.get("detail") or response.text)
+                    if isinstance(error_payload, dict)
+                    else response.text
+                )
+            raise RuntimeError(f"生图服务返回 HTTP {response.status_code}: {detail[:500]}") from exc
 
-        return json.loads(response_body.decode("utf-8"))
-
-    def _download_image(self, image_url: str) -> bytes:
-        """下载图片
-
-        Returns:
-            图片二进制数据
-        """
-        request = urllib.request.Request(
-            url=image_url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
-        )
-
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return response.read()
+        if not response.content:
+            raise RuntimeError("生图服务返回了空图片")
+        content_type = response.headers.get("content-type", "").lower()
+        if not content_type.startswith("image/"):
+            raise RuntimeError(f"生图服务返回了非图片内容: {content_type or 'unknown'}")
+        return response.content
 
 
-# 全局生成器实例（复用连接）
+# 全局客户端实例（复用服务配置）
 _generator: ImageGenerator | None = None
 
 
@@ -262,7 +156,7 @@ async def handle_tool(
             structured_content=structured_content,
         )
 
-    # 构建完整提示词
+    # 构建日志中展示的完整提示词，实际组合由独立服务完成
     full_prompt = prompt
     if style_hint:
         full_prompt = f"{prompt}，{style_hint}"
@@ -272,7 +166,7 @@ async def handle_tool(
     # 生成图像
     generator = _get_generator()
     try:
-        image_data = await generator.generate(full_prompt)
+        image_data = await generator.generate(prompt, style_hint=style_hint)
     except Exception as e:
         logger.error(f"{tool_ctx.runtime.log_prefix} 图像生成异常: {e}", exc_info=True)
         return tool_ctx.build_failure_result(

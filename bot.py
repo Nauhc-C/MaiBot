@@ -14,6 +14,10 @@ import sys
 import time
 import traceback
 
+# 注册 HEIF/HEIC 图片格式支持（必须在任何 PIL 使用之前）
+from pillow_heif import register_heif_opener
+register_heif_opener()
+
 from src.common.i18n import set_locale, t, tn
 from src.common.logger import get_logger, initialize_logging, shutdown_logging
 from src.common.runtime_loop import set_main_loop

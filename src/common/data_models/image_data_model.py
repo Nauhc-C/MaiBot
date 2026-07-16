@@ -8,7 +8,11 @@ import io
 import traceback
 
 from PIL import Image as PILImage
+from pillow_heif import register_heif_opener
 from rich.traceback import install
+
+# 注册 HEIF/HEIC 格式支持
+register_heif_opener()
 
 from src.common.database.database_model import Images, ImageType
 from src.common.logger import get_logger
