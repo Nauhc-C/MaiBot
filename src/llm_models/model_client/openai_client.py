@@ -33,6 +33,7 @@ from PIL import Image as PILImage
 from src.common.logger import get_logger
 from src.config.model_configs import APIProvider, ReasoningParseMode, ToolArgumentParseMode
 from src.llm_models.exceptions import (
+    ContentFilterException,
     EmptyResponseException,
     NetworkConnectionError,
     ReqAbortException,
@@ -120,6 +121,31 @@ CHAT_COMPLETIONS_RESERVED_EXTRA_BODY_KEYS = {
 _MODELS_REQUIRING_MAX_COMPLETION_TOKENS: Set[Tuple[str, str]] = set()
 """记录本进程内已确认「仅支持 max_completion_tokens」的模型，键为 (base_url, model_identifier)。
 命中后直接使用 max_completion_tokens，避免重复触发首次失败重试。"""
+
+CONTENT_FILTER_FINISH_REASON = "content_filter"
+"""OpenAI 兼容接口表示响应被内容审核拦截的完成原因。"""
+
+KNOWN_CONTENT_FILTER_RESPONSES = {"你好，我无法给到相关内容"}
+"""已知供应商在未可靠标记 finish_reason 时返回的完整拒答正文。"""
+
+
+def _raise_for_content_filter(
+    finish_reason: str | None,
+    raw_response: Any,
+    response_content: str | None = None,
+) -> None:
+    """将内容审核响应转为模型失败，避免把拒答正文当作正常回复。"""
+
+    normalized_finish_reason = str(finish_reason or "").strip().lower()
+    normalized_content = str(response_content or "").strip().rstrip("。.!！").strip()
+    matched_known_response = normalized_content in KNOWN_CONTENT_FILTER_RESPONSES
+    if normalized_finish_reason != CONTENT_FILTER_FINISH_REASON and not matched_known_response:
+        return
+    match_source = "finish_reason" if normalized_finish_reason == CONTENT_FILTER_FINISH_REASON else "response_content"
+    raise ContentFilterException(
+        raw_response,
+        f"响应被上游内容审核拦截 (matched_by={match_source})",
+    )
 
 OpenAIStreamResponseHandler = Callable[
     [AsyncStream[ChatCompletionChunk], asyncio.Event | None],
@@ -1162,7 +1188,19 @@ async def _default_stream_response_handler(
 
             accumulator.process_delta(event.choices[0].delta)
 
+        _raise_for_content_filter(
+            accumulator.finish_reason,
+            {
+                "finish_reason": accumulator.finish_reason,
+                "model": accumulator.model_name,
+            },
+        )
         response = accumulator.build_response()
+        _raise_for_content_filter(
+            accumulator.finish_reason,
+            response.raw_data,
+            response.content,
+        )
         model_name = None
         if isinstance(response.raw_data, dict):
             model_name = response.raw_data.get("model")
@@ -1197,11 +1235,14 @@ def _default_normal_response_parser(
     if not choices:
         raise EmptyResponseException(resp, "响应解析失败，choices 为空或缺失")
 
+    finish_reason = getattr(choices[0], "finish_reason", None)
+    raw_message_content = choices[0].message.content
+    message_content = raw_message_content if isinstance(raw_message_content, str) else None
+    _raise_for_content_filter(finish_reason, resp, message_content)
+
     api_response = APIResponse()
     message_part = choices[0].message
     native_reasoning = _extract_reasoning_content(message_part, reasoning_key)
-    raw_message_content = message_part.content
-    message_content = raw_message_content if isinstance(raw_message_content, str) else None
     content_block_reasoning, content_block_content, content_block_tool_calls = _extract_content_blocks(
         raw_message_content,
         tool_argument_parse_mode,
@@ -1249,7 +1290,6 @@ def _default_normal_response_parser(
     usage_record = _extract_usage_record(getattr(resp, "usage", None))
     api_response.raw_data = resp
 
-    finish_reason = getattr(resp.choices[0], "finish_reason", None)
     _log_length_truncation(finish_reason, getattr(resp, "model", None))
     _apply_xml_tool_call_fallback(api_response, tool_argument_parse_mode, resp)
 

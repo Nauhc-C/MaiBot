@@ -20,6 +20,7 @@ from src.common.data_models.llm_service_data_models import (
 from src.config.config import config_manager
 from src.config.model_configs import APIProvider, ModelInfo, TaskConfig
 from src.llm_models.exceptions import (
+    ContentFilterException,
     EmptyResponseException,
     LLMTaskTimeoutError,
     ModelAttemptFailed,
@@ -795,6 +796,16 @@ class LLMOrchestrator:
                 if isinstance(active_request, EmbeddingRequest):
                     return await client.get_embedding(active_request)
                 return await client.get_audio_transcriptions(active_request)
+            except ContentFilterException as e:
+                task_display = self.request_type or "未知任务"
+                logger.warning(
+                    f"任务 '{task_display}' 的模型 '{model_info.name}' 响应被上游内容审核拦截，"
+                    "跳过当前模型并切换候选模型。"
+                )
+                raise ModelAttemptFailed(
+                    f"模型 '{model_info.name}' 响应被内容审核拦截",
+                    original_exception=e,
+                ) from e
             except EmptyResponseException as e:
                 # 空回复：通常为临时问题，单独记录并重试
                 original_error_info = self._get_original_error_info(e)

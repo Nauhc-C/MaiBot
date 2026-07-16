@@ -80,6 +80,12 @@ class EmptyResponseException(ResponseContextException):
     default_message = "响应内容为空，这可能是一个临时性问题"
 
 
+class ContentFilterException(ResponseContextException):
+    """响应被上游内容审核拦截。"""
+
+    default_message = "响应被上游内容审核拦截"
+
+
 class ModelAttemptFailed(Exception):
     """当在单个模型上的所有重试都失败后，由“执行者”函数抛出，以通知“调度器”切换模型。"""
 
