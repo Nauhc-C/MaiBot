@@ -10,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel, Session, create_engine
 
+import os
 import threading
 
 from src.common.database.migrations import create_database_migration_bootstrapper
@@ -25,8 +26,8 @@ logger = get_logger("database")
 
 # 定义数据库文件路径
 ROOT_PATH = Path(__file__).parent.parent.parent.parent.absolute().resolve()
-_DB_DIR = ROOT_PATH / "data"
-_DB_FILE = _DB_DIR / "MaiBot.db"
+_DB_FILE = Path(os.environ.get("MAIBOT_DATABASE_PATH", ROOT_PATH / "data" / "MaiBot.db")).resolve().absolute()
+_DB_DIR = _DB_FILE.parent
 
 # 确保数据库目录存在
 _DB_DIR.mkdir(parents=True, exist_ok=True)

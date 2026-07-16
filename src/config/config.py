@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import inspect
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence, TypeVar, cast
@@ -61,7 +62,7 @@ from .official_configs import (
 """
 
 PROJECT_ROOT: Path = Path(__file__).parent.parent.parent.absolute().resolve()
-CONFIG_DIR: Path = PROJECT_ROOT / "config"
+CONFIG_DIR: Path = Path(os.environ.get("MAIBOT_CONFIG_DIR", PROJECT_ROOT / "config")).resolve().absolute()
 BOT_CONFIG_PATH: Path = (CONFIG_DIR / "bot_config.toml").resolve().absolute()
 MODEL_CONFIG_PATH: Path = (CONFIG_DIR / "model_config.toml").resolve().absolute()
 LEGACY_ENV_PATH: Path = (PROJECT_ROOT / ".env").resolve().absolute()
