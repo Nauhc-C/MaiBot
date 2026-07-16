@@ -14,11 +14,11 @@ from rich.traceback import install
 # 注册 HEIF/HEIC 格式支持
 register_heif_opener()
 
-from src.common.database.database_model import Images, ImageType
-from src.common.logger import get_logger
-from src.common.utils.image_path import resolve_stored_image_path, serialize_stored_image_path
+from src.common.database.database_model import Images, ImageType  # noqa: E402
+from src.common.logger import get_logger  # noqa: E402
+from src.common.utils.image_path import resolve_stored_image_path, serialize_stored_image_path  # noqa: E402
 
-from . import BaseDatabaseDataModel
+from . import BaseDatabaseDataModel  # noqa: E402
 
 
 install(extra_lines=3)

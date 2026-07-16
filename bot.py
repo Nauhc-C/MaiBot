@@ -16,13 +16,14 @@ import traceback
 
 # 注册 HEIF/HEIC 图片格式支持（必须在任何 PIL 使用之前）
 from pillow_heif import register_heif_opener
+
 register_heif_opener()
 
-from src.common.i18n import set_locale, t, tn
-from src.common.logger import get_logger, initialize_logging, shutdown_logging
-from src.common.runtime_loop import set_main_loop
-from src.common.shutdown import request_shutdown
-from src.config.legacy_upgrade_confirmation import require_legacy_upgrade_confirmation
+from src.common.i18n import set_locale, t, tn  # noqa: E402
+from src.common.logger import get_logger, initialize_logging, shutdown_logging  # noqa: E402
+from src.common.runtime_loop import set_main_loop  # noqa: E402
+from src.common.shutdown import request_shutdown  # noqa: E402
+from src.config.legacy_upgrade_confirmation import require_legacy_upgrade_confirmation  # noqa: E402
 
 # 设置工作目录为脚本所在目录
 script_dir = os.path.dirname(os.path.abspath(__file__))
