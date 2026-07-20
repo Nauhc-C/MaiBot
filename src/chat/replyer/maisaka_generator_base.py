@@ -52,6 +52,26 @@ logger = get_logger("replyer")
 
 REPLYER_MAX_HOOK_RETRIES = 3
 TOOL_RESULT_MEDIA_SOURCE_KIND = "tool_result_media"
+STANDALONE_MEDIA_PLACEHOLDERS = frozenset(
+    {
+        "[emoji]",
+        "[图片]",
+        "[图片，识别中.....]",
+        "[表情包]",
+        "[语音消息]",
+        "[语音消息，转录失败]",
+    }
+)
+MEDIA_PLACEHOLDER_RETRY_REASON = (
+    "回复只包含媒体占位符，普通 reply 无法据此发送真实媒体；"
+    "请只输出实际可发送的自然语言文本，不要输出 [语音消息]、[图片]、[表情包] 等上下文占位符"
+)
+
+
+def is_standalone_media_placeholder(text: str) -> bool:
+    """判断回复是否只是用于展示历史媒体的占位符。"""
+
+    return text.strip() in STANDALONE_MEDIA_PLACEHOLDERS
 
 
 @dataclass
@@ -305,14 +325,19 @@ class BaseMaisakaReplyGenerator:
         if locale.startswith("en"):
             return (
                 "Please do not output any extra content (including unnecessary prefixes or suffixes, "
-                "colons, brackets, stickers, plain at, or @). Only output the message content itself."
+                "colons, brackets, stickers, plain at, or @). Do not copy context placeholders such as "
+                "[语音消息], [图片], or [表情包]. Only output text that can actually be sent."
             )
         if locale.startswith("ja"):
             return (
                 "余計な内容（不要な前置きや後置き、コロン、括弧、スタンプ、通常の at や @ など）は出力せず、"
-                "発言内容だけを出力してください。"
+                "[语音消息]、[图片]、[表情包] などの履歴用プレースホルダーもコピーせず、"
+                "実際に送信できるテキストだけを出力してください。"
             )
-        return "请注意不要输出多余内容(包括不必要的前后缀，冒号，括号，表情包，@等 )，只输出发言内容就好。"
+        return (
+            "请注意不要输出多余内容(包括不必要的前后缀，冒号，括号，表情包，@等 )，"
+            "也不要照抄 [语音消息]、[图片]、[表情包] 等历史占位符，只输出实际可发送的文字内容。"
+        )
 
     @staticmethod
     def _replace_regex_capture_groups(reaction: str, match: re.Match[str]) -> str:
@@ -951,6 +976,7 @@ class BaseMaisakaReplyGenerator:
         aggregate_prompt_tokens = 0
         aggregate_completion_tokens = 0
         aggregate_total_tokens = 0
+        standalone_media_placeholder = False
         default_task_name = str(getattr(self.express_model, "task_name", "") or "replyer").strip() or "replyer"
 
         while True:
@@ -1128,6 +1154,12 @@ class BaseMaisakaReplyGenerator:
             matched_regex_pattern = str(after_response_kwargs.get("matched_regex_pattern") or "").strip()
             matched_regex_description = str(after_response_kwargs.get("matched_regex_description") or "").strip()
             retry_reason = str(after_response_kwargs.get("retry_reason") or "").strip()
+            standalone_media_placeholder = is_standalone_media_placeholder(response_text)
+            if standalone_media_placeholder:
+                retry_requested = True
+                retry_reason = "；".join(
+                    reason for reason in (retry_reason, MEDIA_PLACEHOLDER_RETRY_REASON) if reason
+                )
             if retry_requested and retry_count < REPLYER_MAX_HOOK_RETRIES:
                 reason_parts = []
                 if matched_regex:
@@ -1166,16 +1198,23 @@ class BaseMaisakaReplyGenerator:
                 )
                 continue
             if retry_requested:
-                logger.warning(
-                    f"Maisaka 回复器已达到重生成上限，将使用最后一次回复: "
-                    f"session={preview_chat_id} retry={retry_count}/{REPLYER_MAX_HOOK_RETRIES} "
-                    f"rule={matched_regex or 'unknown'} "
-                    f"pattern={matched_regex_pattern or 'unknown'} "
-                    f"response={self._normalize_content(response_text, limit=300)!r}"
-                )
+                if standalone_media_placeholder:
+                    logger.error(
+                        "Maisaka 回复器已达到重生成上限，拒绝发送媒体占位符: "
+                        f"session={preview_chat_id} retry={retry_count}/{REPLYER_MAX_HOOK_RETRIES} "
+                        f"response={self._normalize_content(response_text, limit=300)!r}"
+                    )
+                else:
+                    logger.warning(
+                        f"Maisaka 回复器已达到重生成上限，将使用最后一次回复: "
+                        f"session={preview_chat_id} retry={retry_count}/{REPLYER_MAX_HOOK_RETRIES} "
+                        f"rule={matched_regex or 'unknown'} "
+                        f"pattern={matched_regex_pattern or 'unknown'} "
+                        f"response={self._normalize_content(response_text, limit=300)!r}"
+                    )
             break
 
-        result.success = bool(response_text)
+        result.success = bool(response_text) and not standalone_media_placeholder
         result.completion = LLMCompletionResult(
             request_prompt=prompt_preview,
             response_text=response_text,
@@ -1230,8 +1269,15 @@ class BaseMaisakaReplyGenerator:
         )
 
         if not result.success:
-            result.error_message = "回复器返回了空内容"
-            logger.warning("Maisaka 回复器返回了空内容")
+            if standalone_media_placeholder:
+                result.error_message = "回复器连续返回不可发送的媒体占位符"
+                logger.error(
+                    "Maisaka 回复器连续返回不可发送的媒体占位符: "
+                    f"session={preview_chat_id} response={response_text!r}"
+                )
+            else:
+                result.error_message = "回复器返回了空内容"
+                logger.warning("Maisaka 回复器返回了空内容")
             return finalize(False)
 
         logger.info(

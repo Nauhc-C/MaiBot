@@ -3,6 +3,7 @@
 from typing import Any, Optional
 import traceback
 
+from src.chat.replyer.maisaka_generator_base import is_standalone_media_placeholder
 from src.chat.replyer.replyer_manager import replyer_manager
 from src.cli.maisaka_cli_sender import CLI_PLATFORM_NAME, render_cli_message
 from src.common.data_models.reply_generation_data_models import ReplyGenerationResult, build_reply_monitor_detail
@@ -47,7 +48,9 @@ def get_tool_spec() -> ToolSpec:
         },
         "reply_guide": {
             "type": "string",
-            "description": "回复需要注意的事项和回复指引",
+            "description": (
+                "文字回复需要注意的事项和回复指引。不得用 [语音消息]、[图片]、[表情包] 等占位符代替真实媒体。"
+            ),
         },
     }
     if _use_expression_intent():
@@ -89,7 +92,10 @@ def get_tool_spec() -> ToolSpec:
 
     return ToolSpec(
         name="reply",
-        description="根据当前思考生成并发送一条可见回复。",
+        description=(
+            "根据当前思考生成并发送一条可见文字回复。此工具不会发送语音、图片或表情包；"
+            "需要真实语音时应调用可用的语音 Action，并传入要朗读的正文。"
+        ),
         parameters_schema={
             "type": "object",
             "properties": properties,
@@ -271,6 +277,21 @@ async def handle_tool(
         reply_result.metrics.extra["rich_reply_checker_events"] = rich_reply_events
     if rich_reply_checker_records:
         reply_result.metrics.extra["rich_reply_checker_records"] = rich_reply_checker_records
+
+    if is_standalone_media_placeholder(reply_text):
+        reply_result.success = False
+        reply_result.error_message = "最终回复是不可发送的媒体占位符"
+        reply_result.monitor_detail = build_reply_monitor_detail(reply_result)
+        reply_metadata = _build_monitor_metadata(reply_result)
+        logger.error(
+            f"{tool_ctx.runtime.log_prefix} 拒绝发送媒体占位符: "
+            f"目标消息编号={target_message_id} 回复={reply_text!r}"
+        )
+        return tool_ctx.build_failure_result(
+            invocation.tool_name,
+            "生成结果只是媒体占位符，未发送任何消息。",
+            metadata=reply_metadata,
+        )
 
     if not reply_text:
         reply_result.monitor_detail = build_reply_monitor_detail(reply_result)
