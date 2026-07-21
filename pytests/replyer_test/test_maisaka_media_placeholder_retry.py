@@ -5,7 +5,7 @@ import pytest
 from src.chat.replyer.maisaka_generator_base import (
     REPLYER_MAX_HOOK_RETRIES,
     BaseMaisakaReplyGenerator,
-    is_standalone_media_placeholder,
+    contains_media_placeholder,
 )
 from src.common.data_models.llm_service_data_models import LLMResponseResult
 
@@ -45,14 +45,14 @@ def build_generator(responses: Iterable[str]) -> tuple[BaseMaisakaReplyGenerator
 
 @pytest.mark.parametrize("placeholder", ["[语音消息]", "[图片]", "[表情包]"])
 @pytest.mark.asyncio
-async def test_standalone_media_placeholder_triggers_regeneration(monkeypatch, placeholder: str) -> None:
+async def test_media_placeholder_anywhere_triggers_regeneration(monkeypatch, placeholder: str) -> None:
     runtime_manager = PassthroughRuntimeManager()
     monkeypatch.setattr(
         BaseMaisakaReplyGenerator,
         "_get_runtime_manager",
         staticmethod(lambda: runtime_manager),
     )
-    generator, requests = build_generator([placeholder, "主人，早上好呀~"])
+    generator, requests = build_generator([f"主人，抱抱您~\n{placeholder}", "主人，早上好呀~"])
 
     success, result = await generator.generate_reply_with_context(
         stream_id="test-session",
@@ -75,7 +75,8 @@ async def test_exhausted_media_placeholder_retries_return_failure(monkeypatch) -
         staticmethod(lambda: runtime_manager),
     )
     attempts = REPLYER_MAX_HOOK_RETRIES + 1
-    generator, requests = build_generator(["[语音消息]"] * attempts)
+    rejected_response = "主人，抱抱您~\n[语音消息]"
+    generator, requests = build_generator([rejected_response] * attempts)
 
     success, result = await generator.generate_reply_with_context(
         stream_id="test-session",
@@ -84,8 +85,8 @@ async def test_exhausted_media_placeholder_retries_return_failure(monkeypatch) -
 
     assert success is False
     assert result.success is False
-    assert result.error_message == "回复器连续返回不可发送的媒体占位符"
-    assert result.completion.response_text == "[语音消息]"
+    assert result.error_message == "回复器连续返回含媒体占位符的不可发送内容"
+    assert result.completion.response_text == rejected_response
     assert len(requests) == attempts
     assert result.metrics.extra["replyer_retry_count"] == REPLYER_MAX_HOOK_RETRIES
 
@@ -93,12 +94,14 @@ async def test_exhausted_media_placeholder_retries_return_failure(monkeypatch) -
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        (" [语音消息] ", True),
+        ("主人，抱抱您~\n[语音消息]", True),
         ("[语音消息，转录失败]", True),
         ("[图片，识别中.....]", True),
-        ("收到[语音消息]", False),
+        ("请看[图片 x2]", True),
+        ("收到[Emoji]", True),
+        ("收到[语音消息]", True),
         ("这是实际回复", False),
     ],
 )
-def test_is_standalone_media_placeholder(text: str, expected: bool) -> None:
-    assert is_standalone_media_placeholder(text) is expected
+def test_contains_media_placeholder(text: str, expected: bool) -> None:
+    assert contains_media_placeholder(text) is expected

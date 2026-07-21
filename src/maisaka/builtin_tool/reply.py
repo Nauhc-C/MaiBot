@@ -3,7 +3,7 @@
 from typing import Any, Optional
 import traceback
 
-from src.chat.replyer.maisaka_generator_base import is_standalone_media_placeholder
+from src.chat.replyer.maisaka_generator_base import contains_media_placeholder
 from src.chat.replyer.replyer_manager import replyer_manager
 from src.cli.maisaka_cli_sender import CLI_PLATFORM_NAME, render_cli_message
 from src.common.data_models.reply_generation_data_models import ReplyGenerationResult, build_reply_monitor_detail
@@ -278,18 +278,18 @@ async def handle_tool(
     if rich_reply_checker_records:
         reply_result.metrics.extra["rich_reply_checker_records"] = rich_reply_checker_records
 
-    if is_standalone_media_placeholder(reply_text):
+    if contains_media_placeholder(reply_text):
         reply_result.success = False
-        reply_result.error_message = "最终回复是不可发送的媒体占位符"
+        reply_result.error_message = "最终回复包含不可发送的媒体占位符"
         reply_result.monitor_detail = build_reply_monitor_detail(reply_result)
         reply_metadata = _build_monitor_metadata(reply_result)
         logger.error(
-            f"{tool_ctx.runtime.log_prefix} 拒绝发送媒体占位符: "
+            f"{tool_ctx.runtime.log_prefix} 拒绝发送含媒体占位符的回复: "
             f"目标消息编号={target_message_id} 回复={reply_text!r}"
         )
         return tool_ctx.build_failure_result(
             invocation.tool_name,
-            "生成结果只是媒体占位符，未发送任何消息。",
+            "生成结果包含媒体占位符，未发送任何消息。",
             metadata=reply_metadata,
         )
 

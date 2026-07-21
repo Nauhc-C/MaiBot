@@ -52,26 +52,17 @@ logger = get_logger("replyer")
 
 REPLYER_MAX_HOOK_RETRIES = 3
 TOOL_RESULT_MEDIA_SOURCE_KIND = "tool_result_media"
-STANDALONE_MEDIA_PLACEHOLDERS = frozenset(
-    {
-        "[emoji]",
-        "[图片]",
-        "[图片，识别中.....]",
-        "[表情包]",
-        "[语音消息]",
-        "[语音消息，转录失败]",
-    }
-)
 MEDIA_PLACEHOLDER_RETRY_REASON = (
-    "回复只包含媒体占位符，普通 reply 无法据此发送真实媒体；"
+    "回复中包含媒体占位符，普通 reply 无法据此发送真实媒体；"
     "请只输出实际可发送的自然语言文本，不要输出 [语音消息]、[图片]、[表情包] 等上下文占位符"
 )
+MEDIA_PLACEHOLDER_PATTERN = re.compile(r"\[(?:语音消息|图片|表情包|emoji)[^\]]*\]", re.IGNORECASE)
 
 
-def is_standalone_media_placeholder(text: str) -> bool:
-    """判断回复是否只是用于展示历史媒体的占位符。"""
+def contains_media_placeholder(text: str) -> bool:
+    """判断回复中是否包含历史上下文媒体占位符。"""
 
-    return text.strip() in STANDALONE_MEDIA_PLACEHOLDERS
+    return bool(MEDIA_PLACEHOLDER_PATTERN.search(text))
 
 
 @dataclass
@@ -976,7 +967,7 @@ class BaseMaisakaReplyGenerator:
         aggregate_prompt_tokens = 0
         aggregate_completion_tokens = 0
         aggregate_total_tokens = 0
-        standalone_media_placeholder = False
+        invalid_media_placeholder_response = False
         default_task_name = str(getattr(self.express_model, "task_name", "") or "replyer").strip() or "replyer"
 
         while True:
@@ -1154,8 +1145,8 @@ class BaseMaisakaReplyGenerator:
             matched_regex_pattern = str(after_response_kwargs.get("matched_regex_pattern") or "").strip()
             matched_regex_description = str(after_response_kwargs.get("matched_regex_description") or "").strip()
             retry_reason = str(after_response_kwargs.get("retry_reason") or "").strip()
-            standalone_media_placeholder = is_standalone_media_placeholder(response_text)
-            if standalone_media_placeholder:
+            invalid_media_placeholder_response = contains_media_placeholder(response_text)
+            if invalid_media_placeholder_response:
                 retry_requested = True
                 retry_reason = "；".join(
                     reason for reason in (retry_reason, MEDIA_PLACEHOLDER_RETRY_REASON) if reason
@@ -1198,9 +1189,9 @@ class BaseMaisakaReplyGenerator:
                 )
                 continue
             if retry_requested:
-                if standalone_media_placeholder:
+                if invalid_media_placeholder_response:
                     logger.error(
-                        "Maisaka 回复器已达到重生成上限，拒绝发送媒体占位符: "
+                        "Maisaka 回复器已达到重生成上限，拒绝发送含媒体占位符的回复: "
                         f"session={preview_chat_id} retry={retry_count}/{REPLYER_MAX_HOOK_RETRIES} "
                         f"response={self._normalize_content(response_text, limit=300)!r}"
                     )
@@ -1214,7 +1205,7 @@ class BaseMaisakaReplyGenerator:
                     )
             break
 
-        result.success = bool(response_text) and not standalone_media_placeholder
+        result.success = bool(response_text) and not invalid_media_placeholder_response
         result.completion = LLMCompletionResult(
             request_prompt=prompt_preview,
             response_text=response_text,
@@ -1269,10 +1260,10 @@ class BaseMaisakaReplyGenerator:
         )
 
         if not result.success:
-            if standalone_media_placeholder:
-                result.error_message = "回复器连续返回不可发送的媒体占位符"
+            if invalid_media_placeholder_response:
+                result.error_message = "回复器连续返回含媒体占位符的不可发送内容"
                 logger.error(
-                    "Maisaka 回复器连续返回不可发送的媒体占位符: "
+                    "Maisaka 回复器连续返回含媒体占位符的不可发送内容: "
                     f"session={preview_chat_id} response={response_text!r}"
                 )
             else:
